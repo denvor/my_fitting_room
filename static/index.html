@@ -58,10 +58,20 @@
 </main>
 
 <div class="lightbox" id="lightbox" hidden>
-  <figure>
-    <img id="lb-img" alt="试穿结果大图">
-    <figcaption id="lb-caption"></figcaption>
-  </figure>
+  <div class="lb-row">
+    <figure class="lb-ref">
+      <img id="lb-person" alt="本人照片">
+      <figcaption>人像</figcaption>
+    </figure>
+    <figure class="lb-ref">
+      <img id="lb-garment" alt="衣服照片">
+      <figcaption>衣服</figcaption>
+    </figure>
+    <figure class="lb-main">
+      <img id="lb-img" alt="试穿结果大图">
+    </figure>
+  </div>
+  <p class="lb-caption" id="lb-caption"></p>
   <div class="lb-tools">
     <a id="lb-download" download>下载</a>
     <button id="lb-delete">删除这条</button>

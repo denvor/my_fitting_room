@@ -130,19 +130,25 @@ async function loadGallery() {
     btn.type = "button";
     btn.dataset.id = rec.id;
     btn.dataset.result = rec.files.result;
+    btn.dataset.person = rec.files.person;
+    btn.dataset.garment = rec.files.garment;
     btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
-    const img = document.createElement("img");
-    img.src = rec.files.thumb;
-    img.alt = `试穿记录 ${rec.meta.created_at}`;
-    img.loading = "lazy";
-    btn.append(img);
+    for (const [key, alt] of [["person", "本人照片"], ["garment", "衣服照片"], ["result", "试穿成品"]]) {
+      const img = document.createElement("img");
+      img.src = key === "result" ? rec.files.thumb : rec.files[key];
+      img.alt = alt;
+      img.loading = "lazy";
+      btn.append(img);
+    }
     btn.addEventListener("click", () => openLightbox(btn.dataset));
     return btn;
   }));
   $("empty").hidden = records.length > 0;
 }
 
-function openLightbox({ result, caption, id }) {
+function openLightbox({ result, person, garment, caption, id }) {
+  $("lb-person").src = person;
+  $("lb-garment").src = garment;
   $("lb-img").src = result;
   $("lb-caption").textContent = caption;
   $("lb-download").href = result;
@@ -152,7 +158,7 @@ function openLightbox({ result, caption, id }) {
 
 function closeLightbox() {
   $("lightbox").hidden = true;
-  $("lb-img").removeAttribute("src");
+  for (const id of ["lb-img", "lb-person", "lb-garment"]) $(id).removeAttribute("src");
 }
 
 async function deleteCurrent() {

@@ -151,15 +151,17 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 /* 图库 */
 .gallery { margin-top: 3.5rem; }
 .gallery h2 { font: 600 1.35rem/1.3 var(--serif); letter-spacing: .04em; margin: 0 0 1rem; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: .8rem; }
-.grid button { padding: 0; border: 1px solid var(--line); background: none; }
-.grid img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+/* min-width:0 很关键：按钮作为网格项的自动最小尺寸会把 1fr 轨道顶破 */
+.grid button { display: flex; gap: 3px; min-width: 0; padding: 0; border: 1px solid var(--line); background: none; }
+.grid img { display: block; flex: 1 1 0; min-width: 0; aspect-ratio: 3 / 4; object-fit: cover; }
 .empty { color: var(--ink-soft); font-size: .9rem; }
 
 /* 大图 */
 .lightbox {
   position: fixed;
   inset: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -170,9 +172,14 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 
 .lightbox[hidden] { display: none; }
-.lightbox figure { margin: 0; text-align: center; }
-.lightbox img { max-width: 100%; max-height: 72vh; border: 1px solid var(--line); }
+.lb-row { display: flex; align-items: flex-start; justify-content: center; gap: 1rem; }
+.lightbox figure { margin: 0; text-align: center; min-width: 0; }
+.lightbox img { border: 1px solid var(--line); }
+.lb-main img { max-height: 70vh; max-width: 52vw; }
+.lb-ref img { max-height: 30vh; max-width: 20vw; }
+.lb-ref figcaption { margin-top: .4rem; font: .78rem/1.4 var(--mono); color: var(--ink-soft); }
 .lightbox figcaption { margin-top: .6rem; font: .82rem/1.6 var(--mono); color: var(--paper); }
+.lb-caption { margin: 0; text-align: center; font: .82rem/1.6 var(--mono); color: var(--paper); }
 .lb-tools { display: flex; gap: .6rem; }
 .lb-tools button, .lb-tools a { background: var(--surface); }
 #lb-delete { color: var(--stitch); }
@@ -180,6 +187,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 42rem) {
   body { padding: 1.5rem 1rem 3rem; }
   .frames { grid-template-columns: 1fr; }
+  .lb-row { flex-wrap: wrap; }
+  .lb-main { order: -1; }
+  .lb-main img { max-height: 58vh; max-width: 88vw; }
+  .lb-ref img { max-height: 20vh; max-width: 38vw; }
 }
 
 @media (prefers-reduced-motion: reduce) {
