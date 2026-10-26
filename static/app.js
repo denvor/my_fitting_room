@@ -113,7 +113,7 @@ function postTryon(form, onUploaded) {
   // 上传进度只有 XHR 给得出来，fetch 不提供 upload progress
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/tryon");
+    xhr.open("POST", "api/tryon");
     let handedOver = false;
     const handOver = () => {
       if (handedOver) return;
@@ -232,7 +232,7 @@ async function submit() {
 async function loadQuota() {
   const el = $("quota");
   try {
-    const body = await (await fetch("/api/quota")).json();
+    const body = await (await fetch("api/quota")).json();
     if (body.ok) {
       const q = body.quota;
       quota = { times: q.times_1k, per: body.credits_per_1k };
@@ -293,7 +293,7 @@ function renderGallery() {
 
 async function loadGallery(gotoFirst) {
   try {
-    records = (await (await fetch("/api/records")).json()).records || [];
+    records = (await (await fetch("api/records")).json()).records || [];
   } catch {
     records = []; // 服务还没起来，图库空着就好
   }
@@ -319,7 +319,7 @@ function closeLightbox() {
 async function deleteCurrent() {
   const id = $("lb-delete").dataset.id;
   if (!confirm("删掉这条记录？你的照片、衣服照片和成品会一起从磁盘移除。")) return;
-  try { await fetch(`/api/records/${id}`, { method: "DELETE" }); } catch { /* 下面重新拉列表会反映真实状态 */ }
+  try { await fetch(`api/records/${id}`, { method: "DELETE" }); } catch { /* 下面重新拉列表会反映真实状态 */ }
   if (currentRecord && currentRecord.id === id) {
     $("result").hidden = true;
     currentRecord = null;

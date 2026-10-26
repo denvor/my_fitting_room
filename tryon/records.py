@@ -61,8 +61,8 @@ def save_record(
 
 def _files_of(rid: str, result_name: str = DEFAULT_RESULT_NAME) -> dict[str, str]:
     """记录里四张图对外的 URL。"""
-    files = {name: f"/files/{rid}/{name}.{_FILE_SUFFIX[name]}" for name in ("person", "garment", "thumb")}
-    files["result"] = f"/files/{rid}/{result_name}"
+    files = {name: f"files/{rid}/{name}.{_FILE_SUFFIX[name]}" for name in ("person", "garment", "thumb")}
+    files["result"] = f"files/{rid}/{result_name}"
     return files
 
 

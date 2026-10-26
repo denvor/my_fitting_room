@@ -8,7 +8,7 @@
 
 ```bash
 uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip install -r requirements.txt
-.venv/bin/python app.py
+.venv/bin/python dev_run.py
 ```
 
 - 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，无鉴权，只在你自己网络里用）。
@@ -62,7 +62,7 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 - 结果图下载失败：那次额度已经花掉了，页面会把原链接亮出来，24 小时内可以自己另存。
 - `The read operation timed out`：600 秒还没回包。这次额度多半已经扣了，图却拿不回来，图库里也不会有这条。
 - 页眉显示"额度查不到"：`qianwen` 命令没装或不在服务进程的 PATH 上，生成不受影响。
-- 提示"连不上本机服务"：`app.py` 没在跑。
+- 提示"连不上本机服务"：`dev_run.py` 没在跑。
 
 ## 测试
 

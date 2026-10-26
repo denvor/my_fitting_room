@@ -1,4 +1,4 @@
-"""启动试穿工具：python app.py，然后本机或局域网打开 http://<本机IP>:8000"""
+"""启动试穿工具：python dev_run.py，然后本机或局域网打开 http://<本机IP>:8000"""
 
 from tryon.server import create_app
 from tryon.settings import load_settings

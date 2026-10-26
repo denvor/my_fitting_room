@@ -41,7 +41,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         raise SettingsError(
-            f"找不到 {path}。把 .env 放在项目根目录（在 {PROJECT_ROOT} 里运行 python app.py 也可以）。"
+            f"找不到 {path}。把 .env 放在项目根目录（在 {PROJECT_ROOT} 里运行 python dev_run.py 也可以）。"
         )
 
     values: dict[str, str] = {}
