@@ -95,7 +95,7 @@ def test_load_settings_missing_key_raises(tmp_path):
         load_settings(p)
 ```
 
-- [ ] **Step 3: 跑测试确认失败** — `cd /home/denvor/work/qwen-image && .venv/bin/python -m pytest tests/test_settings.py -q`，预期 `ModuleNotFoundError`/`ImportError`。
+- [ ] **Step 3: 跑测试确认失败** — `cd ~/work/qwen-image && .venv/bin/python -m pytest tests/test_settings.py -q`，预期 `ModuleNotFoundError`/`ImportError`。
 - [ ] **Step 4: 实现** `tryon/settings.py`：手工按行解析 `KEY=VALUE`（不引入 python-dotenv），`derive_endpoint` 先去掉结尾 `/`，去掉结尾 `/compatible-mode/v1`（若有）再接固定路径；`load_settings` 对 `OPENAI_URL`/`API_KEY`/`MODEL` 逐项缺失即抛 `SettingsError("缺少 API_KEY")`。
 - [ ] **Step 5: 跑测试确认通过** — 同上命令，预期 4 passed。
 - [ ] **Step 6: 转移验收示例图** — 用 Pillow 把 `spike_in/person.png`、`spike_in/garment.png` 存成 `samples/person.jpg`、`samples/garment.jpg`（长边 1536 以内、quality=92）。验证：`.venv/bin/python -c "from PIL import Image; [print(i, Image.open('samples/'+i).size) for i in ('person.jpg','garment.jpg')]"` 两张都在 896×1152 附近。
