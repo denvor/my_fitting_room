@@ -26,6 +26,9 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 输出固定 1K 档（总像素不超过 2,250,000）、一次 1 张、无水印；提示词写死在 `tryon/prompt.py`，
 改动它等于改质量验收线（设计文档 6.6 节是基线）。
 
+一次成功的 1K 生成实测扣 **58 credit**（token plan 月度 25500 credit，约够 439 次）。
+查询额度本身不计费；实测中唯一那次 300 秒超时没扣额度，但别把这条当保险。
+
 ## 图存在哪
 
 `data/records/<时间戳-随机码>/` 一条记录一个目录：
@@ -51,4 +54,4 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 .venv/bin/python -m pytest -q
 ```
 
-51 个测试，全离线（接口调用用替身，不联网）。第 8 节的端到端验收需要真实调一次接口，见设计文档。
+58 个测试，全离线（接口调用用替身，不联网）。第 8 节的端到端验收需要真实调一次接口，见设计文档。
