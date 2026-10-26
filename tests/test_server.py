@@ -223,3 +223,14 @@ def test_index_page_is_served(client):
 def test_static_assets_are_served(client):
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/style.css").status_code == 200
+
+
+def test_files_route_works_with_relative_root(tmp_path, monkeypatch):
+    """线上 root 是相对路径 data/records，不先转绝对路径会拼到 Flask 的 root_path（tryon/ 包目录）上。"""
+    monkeypatch.chdir(tmp_path)
+    app = create_app(SETTINGS, generate_fn=ok_generation, root="records")
+    app.testing = True
+    client = app.test_client()
+    rid = client.post("/api/tryon", data=fields()).get_json()["record"]["id"]
+    assert (tmp_path / "records" / rid / "result.png").is_file()
+    assert client.get(f"/files/{rid}/result.png").status_code == 200

@@ -44,7 +44,7 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
-    root_path = Path(root)
+    root_path = Path(root).resolve()  # 必须先转绝对路径，否则 send_from_directory 会拼到 app.root_path 上
     lock = threading.Lock()  # 同一时间只允许一个任务在跑
 
     @app.errorhandler(413)
