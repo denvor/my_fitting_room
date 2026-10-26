@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissing
+from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
 from tryon.server import create_app
 from tryon.settings import Settings
@@ -39,6 +40,10 @@ def ok_generation(settings, person, garment, timeout=300) -> Generation:
     )
 
 
+def fake_quota() -> Quota:
+    return Quota(total=25500, used=10756.767, times_1k=254, remaining_days=13)
+
+
 def fields(person=PERSON, garment=GARMENT):
     data = {}
     if person is not None:
@@ -50,9 +55,9 @@ def fields(person=PERSON, garment=GARMENT):
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota):
         root = tmp_path / "records"
-        app = create_app(SETTINGS, generate_fn=generate_fn, root=root)
+        app = create_app(SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn)
         app.testing = True
         return app.test_client(), root
 
@@ -269,3 +274,37 @@ def test_jpeg_result_is_served_with_real_name(make):
     assert url.endswith("/result.jpg")
     r = client.get(url)
     assert r.status_code == 200 and r.headers["Content-Type"].startswith("image/jpeg")
+
+
+def test_quota_endpoint_reports_how_many_1k_left(make):
+    client, _ = make(quota_fn=fake_quota)
+    body = client.get("/api/quota").get_json()
+
+    assert body["ok"] is True and body["quota"]["times_1k"] == 254
+    assert body["quota"]["remaining_days"] == 13
+
+
+def test_quota_endpoint_degrades_when_cli_is_unusable(make):
+    """查不到额度只能少一行信息，不能把页面带崩。"""
+    def boom():
+        raise QuotaUnavailable("本机没有 qianwen 命令")
+
+    client, _ = make(quota_fn=boom)
+    r = client.get("/api/quota")
+    body = r.get_json()
+
+    assert r.status_code == 200 and body["ok"] is False
+    assert "qianwen" in body["message"]
+
+
+def test_read_timeout_tells_the_user_credits_may_be_gone(make):
+    """接口不回包的超时是最贵的失败：钱可能花了，图没拿到。"""
+    def hang(settings, person, garment, timeout=600):
+        raise TimeoutError("The read operation timed out")
+
+    client, _ = make(generate_fn=hang)
+    body = client.get_json() if False else client.post("/api/tryon", data=fields()).get_json()
+
+    assert body["ok"] is False and body["stage"] == "api"
+    assert "read operation timed out" in body["message"]
+    assert "58 credit" in body["message"]

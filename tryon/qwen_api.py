@@ -12,6 +12,8 @@ from tryon.settings import Settings
 
 DOWNLOAD_TIMEOUT = 120
 RETRY_DELAY = 2.0
+# 实测 1K 档 46–113 秒，还见过 300 秒不回的长尾：300 秒不是余量，是正好站在长尾里
+GENERATION_TIMEOUT = 600
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,12 @@ def download_image(url: str, attempts: int = 3, timeout: int = DOWNLOAD_TIMEOUT)
     raise ResultFetchFailed(url=url, reason=last_reason)
 
 
-def generate(settings: Settings, person: PreparedImage, garment: PreparedImage, timeout: int = 300) -> Generation:
+def generate(
+    settings: Settings,
+    person: PreparedImage,
+    garment: PreparedImage,
+    timeout: int = GENERATION_TIMEOUT,
+) -> Generation:
     size = api_size(person.width, person.height)
     body = build_request(person, garment, size, settings.model)
     status, raw = _post(settings.endpoint, body, settings.api_key, timeout)

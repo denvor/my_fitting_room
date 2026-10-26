@@ -33,7 +33,10 @@ h1 {
   letter-spacing: .04em;
 }
 
-.lede { margin: .5rem 0 2.5rem; color: var(--ink-soft); }
+.lede { margin: .5rem 0 .4rem; color: var(--ink-soft); }
+
+/* 额度那一行：等接口回填，字数会变 */
+.facts { margin: 0 0 2.5rem; font: .85rem/1.7 var(--mono); color: var(--ink-soft); }
 
 /* 两张取景框 */
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }

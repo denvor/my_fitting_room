@@ -2,6 +2,7 @@
 
 import threading
 import time
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from tryon.image_prep import ImageRejected, api_size, prepare_upload
 from tryon.prompt import TRYON_PROMPT
+from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
 from tryon.records import (
     FILE_BASENAMES,
@@ -39,7 +41,10 @@ def _upload_bytes(field: str) -> bytes:
 
 
 def create_app(
-    settings: Settings, generate_fn=generate, root: Path | str = "data/records"
+    settings: Settings,
+    generate_fn=generate,
+    root: Path | str = "data/records",
+    quota_fn=read_quota,
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
@@ -53,6 +58,14 @@ def create_app(
     @app.get("/")
     def index():
         return send_from_directory(STATIC_DIR, "index.html")
+
+    @app.get("/api/quota")
+    def api_quota():
+        """还剩多少次可用；查不到只是少一行信息，页面照常。"""
+        try:
+            return jsonify({"ok": True, "quota": asdict(quota_fn()), "credits_per_1k": CREDITS_PER_1K})
+        except QuotaUnavailable as e:
+            return jsonify({"ok": False, "message": str(e)})
 
     @app.get("/api/records")
     def api_records_list():
@@ -96,7 +109,8 @@ def create_app(
                     result_url=e.url,
                 )
             except Exception as e:
-                return _fail("api", f"请求接口失败：{e}", 502)
+                # 超时多半是服务端还在跑：额度照扣（实测迟到 8 分钟照样扣），图却拿不回来
+                return _fail("api", f"请求接口失败：{e}。这次可能已经扣掉 {CREDITS_PER_1K} credit，图库里不会有这条记录。", 502)
 
             elapsed = round(time.monotonic() - started, 1)
             rid = new_record_id()

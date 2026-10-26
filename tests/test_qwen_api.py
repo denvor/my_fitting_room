@@ -148,3 +148,14 @@ def test_download_image_retries_three_times_then_reports_url(monkeypatch):
 
     assert len(calls) == 3 and e.value.url == "https://oss.test/a.png"
     assert "connection reset" in str(e.value)
+
+
+def test_generate_waits_long_enough_for_the_slow_tail(monkeypatch):
+    """实测有 300 秒不回的长尾，超时要留出余量，否则额度照扣图却拿不到。"""
+    posted = []
+    monkeypatch.setattr(qwen_api, "_post", fake_post([(200, ok_response())], posted))
+    monkeypatch.setattr(qwen_api, "_get", lambda url, timeout: b"fakepng")
+
+    generate(SETTINGS, PERSON, GARMENT)
+
+    assert posted[0]["timeout"] == 600

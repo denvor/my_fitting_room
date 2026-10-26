@@ -1,6 +1,6 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-const ESTIMATE_MS = 55000; // 实测 1K 档 55.8 秒，用它估进度条
+const ESTIMATE_MS = 90000; // 实测 1K 档多在 80–100 秒，用它估进度条
 
 const $ = (id) => document.getElementById(id);
 const files = { person: null, garment: null };
@@ -116,6 +116,22 @@ async function submit() {
   if (body.ok) showResult(body);
   else showError(body);
   loadGallery();
+  loadQuota(); // 失败的那次也可能已经扣掉额度，重查一遍
+}
+
+async function loadQuota() {
+  const el = $("quota");
+  try {
+    const body = await (await fetch("/api/quota")).json();
+    if (body.ok) {
+      const q = body.quota;
+      el.textContent = `还能试穿 ${q.times_1k} 次 · 一次 ${body.credits_per_1k} credit · ${q.remaining_days} 天后额度重置`;
+    } else {
+      el.textContent = `额度查不到：${body.message}`;
+    }
+  } catch {
+    el.textContent = "额度查不到：连不上本机服务。";
+  }
 }
 
 async function loadGallery() {
@@ -182,3 +198,4 @@ $("lb-close").addEventListener("click", closeLightbox);
 $("lightbox").addEventListener("click", (e) => { if (e.target === $("lightbox")) closeLightbox(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
 loadGallery();
+loadQuota();
