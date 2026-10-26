@@ -160,6 +160,11 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .grid img { display: block; flex: 1 1 0; min-width: 0; aspect-ratio: 3 / 4; object-fit: cover; }
 .empty { color: var(--ink-soft); font-size: .9rem; }
 
+/* 图库分页 */
+.pager { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1.4rem; }
+.pager button { padding: .45rem .85rem; font: 500 .9rem/1 var(--mono); }
+.pager button[aria-current="page"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+
 /* 大图 */
 .lightbox {
   position: fixed;

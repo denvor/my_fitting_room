@@ -2,10 +2,14 @@
 
 const ESTIMATE_MS = 90000; // 实测 1K 档多在 80–100 秒，用它估进度条
 
+const PAGE_SIZE = 5; // 图库每页几条
+
 const $ = (id) => document.getElementById(id);
 const files = { person: null, garment: null };
 let ticker = null;
 let currentRecord = null;
+let records = [];
+let page = 1;
 
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
@@ -32,13 +36,59 @@ function setPct(pct) {
   tape.setAttribute("aria-valuenow", String(Math.round(pct)));
 }
 
-function startTape() {
-  const startedAt = Date.now();
+function showTape() {
+  clearInterval(ticker);
   $("tape").hidden = false;
+  setPct(0);
+}
+
+function setUploadPct(loaded, total) {
+  if (!total) {
+    $("readout").textContent = "准备上传…";
+    return;
+  }
+  const pct = Math.min(100, Math.round((loaded / total) * 100));
+  const mb = (n) => (n / 1048576).toFixed(1);
+  setPct(pct);
+  $("readout").textContent = `上传中 ${pct}% · ${mb(loaded)}/${mb(total)} MB`;
+}
+
+function postTryon(form, onUploaded) {
+  // 上传进度只有 XHR 给得出来，fetch 不提供 upload progress
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/tryon");
+    let handedOver = false;
+    const handOver = () => {
+      if (handedOver) return;
+      handedOver = true;
+      onUploaded();
+    };
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) setUploadPct(e.loaded, e.total);
+    };
+    xhr.upload.onload = handOver; // 传得太快、一次 progress 都没有时靠它兜底
+    xhr.onload = () => {
+      handOver();
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch {
+        resolve({ ok: false, stage: "api", message: `本机服务返回读不懂（HTTP ${xhr.status}）` });
+      }
+    };
+    xhr.onerror = () =>
+      resolve({ ok: false, stage: "api", message: "连不上本机服务，确认 python app.py 还开着。" });
+    xhr.send(form);
+  });
+}
+
+function startTape(prefix = "生成中") {
+  const startedAt = Date.now();
+  showTape();
   const step = () => {
     const elapsed = Date.now() - startedAt;
     setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS))));
-    $("readout").textContent = `生成中 · ${Math.round(elapsed / 1000)} 秒`;
+    $("readout").textContent = `${prefix} · ${Math.round(elapsed / 1000)} 秒`;
   };
   step();
   ticker = setInterval(step, 100);
@@ -97,25 +147,21 @@ function setBusy(busy) {
 async function submit() {
   if (!files.person || !files.garment) return;
   setBusy(true);
-  startTape();
+  showTape();
+  setUploadPct(0, 0);
 
   const form = new FormData();
   form.append("person", files.person);
   form.append("garment", files.garment);
 
-  let body;
-  try {
-    const resp = await fetch("/api/tryon", { method: "POST", body: form });
-    body = await resp.json();
-  } catch {
-    body = { ok: false, stage: "api", message: "连不上本机服务，确认 python app.py 还开着。" };
-  }
+  // 上传段是浏览器给的真实进度；传完才切换到估算的生成进度
+  const body = await postTryon(form, () => startTape("已上传，生成中"));
 
   stopTape();
   setBusy(false);
   if (body.ok) showResult(body);
   else showError(body);
-  loadGallery();
+  loadGallery(true);
   loadQuota(); // 失败的那次也可能已经扣掉额度，重查一遍
 }
 
@@ -134,32 +180,58 @@ async function loadQuota() {
   }
 }
 
-async function loadGallery() {
-  let records = [];
+function recordCell(rec) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.dataset.id = rec.id;
+  btn.dataset.result = rec.files.result;
+  btn.dataset.person = rec.files.person;
+  btn.dataset.garment = rec.files.garment;
+  btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
+  for (const [key, alt] of [["person", "本人照片"], ["garment", "衣服照片"], ["result", "试穿成品"]]) {
+    const img = document.createElement("img");
+    img.src = key === "result" ? rec.files.thumb : rec.files[key];
+    img.alt = alt;
+    img.loading = "lazy";
+    btn.append(img);
+  }
+  btn.addEventListener("click", () => openLightbox(btn.dataset));
+  return btn;
+}
+
+function renderGallery() {
+  const pages = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
+  page = Math.min(Math.max(1, page), pages); // 删完最后一页要自动退回去
+  $("grid").replaceChildren(
+    ...records.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(recordCell)
+  );
+
+  const pager = $("pager");
+  pager.replaceChildren(
+    ...Array.from({ length: pages }, (_, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = String(i + 1);
+      if (i + 1 === page) btn.setAttribute("aria-current", "page");
+      btn.addEventListener("click", () => {
+        page = i + 1;
+        renderGallery();
+      });
+      return btn;
+    })
+  );
+  pager.hidden = pages <= 1;
+  $("empty").hidden = records.length > 0;
+}
+
+async function loadGallery(gotoFirst) {
   try {
     records = (await (await fetch("/api/records")).json()).records || [];
-  } catch { /* 服务还没起来，图库空着就好 */ }
-
-  const grid = $("grid");
-  grid.replaceChildren(...records.map((rec) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.dataset.id = rec.id;
-    btn.dataset.result = rec.files.result;
-    btn.dataset.person = rec.files.person;
-    btn.dataset.garment = rec.files.garment;
-    btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
-    for (const [key, alt] of [["person", "本人照片"], ["garment", "衣服照片"], ["result", "试穿成品"]]) {
-      const img = document.createElement("img");
-      img.src = key === "result" ? rec.files.thumb : rec.files[key];
-      img.alt = alt;
-      img.loading = "lazy";
-      btn.append(img);
-    }
-    btn.addEventListener("click", () => openLightbox(btn.dataset));
-    return btn;
-  }));
-  $("empty").hidden = records.length > 0;
+  } catch {
+    records = []; // 服务还没起来，图库空着就好
+  }
+  if (gotoFirst) page = 1; // 新生成的在最前面，别留在第三页看空
+  renderGallery();
 }
 
 function openLightbox({ result, person, garment, caption, id }) {
