@@ -6,3 +6,4 @@ CLAUDE.md
 data/
 .superpowers/
 .playwright-mcp/
+__pycache__/
