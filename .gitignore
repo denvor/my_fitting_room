@@ -4,3 +4,5 @@ CLAUDE.md
 .venv/*
 .env
 data/
+.superpowers/
+.playwright-mcp/

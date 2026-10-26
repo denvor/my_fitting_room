@@ -211,3 +211,15 @@ def test_files_route_rejects_traversal(make):
     assert client.get("/files/..%2f..%2f.env/person.jpg").status_code in (400, 404)
     assert client.get("/files/not-an-id/person.jpg").status_code in (400, 404)
 
+
+def test_index_page_is_served(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    page = r.get_json() if r.is_json else r.get_data(as_text=True)
+    assert "你的照片" in page and "衣服照片" in page
+    assert "<script" in page and "/static/app.js" in page
+
+
+def test_static_assets_are_served(client):
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/style.css").status_code == 200

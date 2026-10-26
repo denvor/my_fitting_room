@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>试衣间</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23e9ece7'/%3E%3Cpath d='M9 25V13l7-6 7 6v12' fill='none' stroke='%232f6f8f' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>试衣间</h1>
+  <p class="lede">两张图，一分钟，看这件衣服上身。</p>
+</header>
+
+<main>
+  <section class="frames">
+    <label class="frame" id="frame-person">
+      <input type="file" id="person" accept="image/*">
+      <img id="person-preview" alt="" hidden>
+      <span class="frame-pick">点这里选图</span>
+      <span class="frame-name">你的照片</span>
+      <span class="frame-hint">正面、单人、光线均匀</span>
+    </label>
+
+    <label class="frame" id="frame-garment">
+      <input type="file" id="garment" accept="image/*">
+      <img id="garment-preview" alt="" hidden>
+      <span class="frame-pick">点这里选图</span>
+      <span class="frame-name">衣服照片</span>
+      <span class="frame-hint">只放这一件，拍清款式和细节</span>
+    </label>
+  </section>
+
+  <p class="hint" id="need-both">两张都选好才能开始。</p>
+
+  <div class="actions">
+    <button id="go" class="primary" disabled>开始试穿</button>
+    <button id="again" hidden>再来一次</button>
+  </div>
+
+  <div class="tape" id="tape" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+    <span class="cursor"></span>
+    <span class="readout" id="readout">生成中 · 0 秒</span>
+  </div>
+
+  <section class="result" id="result" aria-live="polite" hidden>
+    <img id="result-img" alt="试穿结果">
+    <p class="meta" id="result-meta"></p>
+  </section>
+
+  <section class="gallery">
+    <h2>图库</h2>
+    <div class="grid" id="grid"></div>
+    <p class="empty" id="empty" hidden>还没有记录。生成一次就会留在这里。</p>
+  </section>
+</main>
+
+<div class="lightbox" id="lightbox" hidden>
+  <figure>
+    <img id="lb-img" alt="试穿结果大图">
+    <figcaption id="lb-caption"></figcaption>
+  </figure>
+  <div class="lb-tools">
+    <a id="lb-download" download>下载</a>
+    <button id="lb-delete">删除这条</button>
+    <button id="lb-close">关闭</button>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
