@@ -14,6 +14,7 @@ FILE_NAMES = ("person", "garment", "result", "thumb")
 RECORD_ID_RE = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 _FILE_SUFFIX = {"person": "jpg", "garment": "jpg", "result": "png", "thumb": "jpg"}
 THUMB_LONG_SIDE = 320
+FILE_BASENAMES = tuple(f"{name}.{_FILE_SUFFIX[name]}" for name in FILE_NAMES)
 
 
 def new_record_id(now: datetime | None = None) -> str:
