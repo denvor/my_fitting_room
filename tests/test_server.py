@@ -234,3 +234,21 @@ def test_files_route_works_with_relative_root(tmp_path, monkeypatch):
     rid = client.post("/api/tryon", data=fields()).get_json()["record"]["id"]
     assert (tmp_path / "records" / rid / "result.png").is_file()
     assert client.get(f"/files/{rid}/result.png").status_code == 200
+
+
+def test_record_save_failure_degrades_to_readable_error(make, tmp_path, monkeypatch):
+    """图已经生成（额度已花），落盘失败时不能吐 500 HTML：前端会把"连不上本机服务"糊上去。"""
+    from tryon import server
+
+    def boom(root, rid, person, garment, result, meta):
+        raise OSError("设备上没有空间")
+
+    monkeypatch.setattr(server, "save_record", boom)
+    client, root = make()
+    r = client.post("/api/tryon", data=fields())
+    body = r.get_json()
+
+    assert body is not None, "响应必须是 JSON，不能是 500 HTML 页"
+    assert r.status_code == 502 and body["ok"] is False and body["stage"] == "result"
+    assert "设备上没有空间" in body["message"]
+    assert (list(root.iterdir()) if root.exists() else []) == []

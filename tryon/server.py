@@ -110,7 +110,10 @@ def create_app(
                 "request_id": g.request_id,
                 "rewrite_status": g.rewrite_status,
             }
-            save_record(root_path, rid, person.data, garment.data, g.image, meta)
+            try:
+                save_record(root_path, rid, person.data, garment.data, g.image, meta)
+            except OSError as e:  # 图已经拿到、额度已经花掉，落盘失败不能变成 500 HTML
+                return _fail("result", f"结果图已生成，但写入本地失败：{e}。这次生成已经花掉额度，图库里不会有这条记录。", 502)
             return jsonify(
                 {"ok": True, "elapsed_s": elapsed, "record": {"id": rid, "meta": meta, "files": record_files(rid)}}
             )
