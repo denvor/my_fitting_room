@@ -12,17 +12,43 @@ let records = [];
 let page = 1;
 let quota = null; // 页眉那个数字，开始前的确认要用
 
+const PREVIEW_SIDE = 720; // 取景框就这么大，没必要解 3072×4096 的原图
+const previewUrls = { person: "", garment: "" };
+
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    files[kind] = file;
-    const preview = $(`${kind}-preview`);
-    preview.src = URL.createObjectURL(file);
-    preview.hidden = false;
-    $(`frame-${kind}`).classList.add("has-image");
+    files[kind] = file; // 要上传的一直是原图，降采样只为了显示
     readyToGo();
+    showPreview(kind, file);
   });
+}
+
+async function showPreview(kind, file) {
+  const preview = $(`${kind}-preview`);
+  preview.decoding = "async"; // 解码别占主线程，手机上"点了没反应"就是它
+  try {
+    // resizeWidth 单独给才等比（实测 3072×4096 → 720×960）；宽高都给会被拉成方块
+    const bmp = await createImageBitmap(file, {
+      resizeWidth: PREVIEW_SIDE,
+      resizeQuality: "high",
+      imageOrientation: "from-image",
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    canvas.getContext("2d").drawImage(bmp, 0, 0);
+    bmp.close();
+    const small = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+    preview.src = URL.createObjectURL(small);
+  } catch {
+    preview.src = URL.createObjectURL(file); // 浏览器不配合就退回原图，别不显示
+  }
+  URL.revokeObjectURL(previewUrls[kind]);
+  previewUrls[kind] = preview.src;
+  preview.hidden = false;
+  $(`frame-${kind}`).classList.add("has-image");
 }
 
 function readyToGo() {
