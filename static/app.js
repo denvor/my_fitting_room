@@ -12,40 +12,60 @@ let records = [];
 let page = 1;
 let quota = null; // 页眉那个数字，开始前的确认要用
 
-const PREVIEW_SIDE = 720; // 取景框就这么大，没必要解 3072×4096 的原图
+const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的原图
+const UPLOAD_MAX_SIDE = 1536; // 服务端本来就把长边缩到这里，先在手机里缩好，省掉几 MB 上行
+const UPLOAD_QUALITY = 0.92; // 和服务端那次重编码对齐，少一次有损压缩
 const previewUrls = { person: "", garment: "" };
+const working = { person: false, garment: false }; // 还在压缩的那一格
 
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    files[kind] = file; // 要上传的一直是原图，降采样只为了显示
+    files[kind] = file; // 先记下原图：压缩不配合或失败就按原样上传
+    working[kind] = true;
+    setPickLabel(kind);
     readyToGo();
-    showPreview(kind, file);
+    prepareImage(kind, file);
   });
 }
 
-async function showPreview(kind, file) {
+function setPickLabel(kind) {
+  $(`frame-${kind}`).querySelector(".frame-pick").textContent = working[kind] ? "处理中…" : "点这里选图";
+}
+
+async function scaledBlob(bmp, scale, quality) {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bmp.width * scale));
+  canvas.height = Math.max(1, Math.round(bmp.height * scale));
+  canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  return new Promise((r) => canvas.toBlob(r, "image/jpeg", quality));
+}
+
+// 一次解码出两份：要上传的（长边 ≤1536）和取景框里看的（长边 ≤720）
+async function prepareImage(kind, file) {
   const preview = $(`${kind}-preview`);
   preview.decoding = "async"; // 解码别占主线程，手机上"点了没反应"就是它
   try {
-    // resizeWidth 单独给才等比（实测 3072×4096 → 720×960）；宽高都给会被拉成方块
-    const bmp = await createImageBitmap(file, {
-      resizeWidth: PREVIEW_SIDE,
-      resizeQuality: "high",
-      imageOrientation: "from-image",
-    });
-    const canvas = document.createElement("canvas");
-    canvas.width = bmp.width;
-    canvas.height = bmp.height;
-    canvas.getContext("2d").drawImage(bmp, 0, 0);
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); // EXIF 方向在这一步定死
+    const long = Math.max(bmp.width, bmp.height);
+    const upload = long > UPLOAD_MAX_SIDE ? await scaledBlob(bmp, UPLOAD_MAX_SIDE / long, UPLOAD_QUALITY) : null;
+    const view = long > PREVIEW_SIDE ? await scaledBlob(bmp, PREVIEW_SIDE / long, 0.85) : null;
     bmp.close();
-    const small = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
-    preview.src = URL.createObjectURL(small);
+    if (upload) files[kind] = new File([upload], file.name || `${kind}.jpg`, { type: "image/jpeg" });
+    showPreviewBlob(kind, view || upload || file);
   } catch {
-    preview.src = URL.createObjectURL(file); // 浏览器不配合就退回原图，别不显示
+    showPreviewBlob(kind, file); // 浏览器不配合就原图上传、原图显示，不能什么都不显示
   }
+  working[kind] = false;
+  setPickLabel(kind);
+  readyToGo();
+}
+
+function showPreviewBlob(kind, blob) {
+  const preview = $(`${kind}-preview`);
   URL.revokeObjectURL(previewUrls[kind]);
+  preview.src = URL.createObjectURL(blob);
   previewUrls[kind] = preview.src;
   preview.hidden = false;
   $(`frame-${kind}`).classList.add("has-image");
@@ -53,8 +73,17 @@ async function showPreview(kind, file) {
 
 function readyToGo() {
   const both = Boolean(files.person && files.garment);
-  $("go").disabled = !both;
-  $("need-both").textContent = both ? "" : files.person ? "还差衣服照片。" : files.garment ? "还差你的照片。" : "两张都选好才能开始。";
+  const busy = working.person || working.garment;
+  $("go").disabled = !both || busy;
+  $("need-both").textContent = busy
+    ? "图片还在处理…"
+    : both
+      ? ""
+      : files.person
+        ? "还差衣服照片。"
+        : files.garment
+          ? "还差你的照片。"
+          : "两张都选好才能开始。";
 }
 
 function setPct(pct) {
