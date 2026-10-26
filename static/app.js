@@ -10,6 +10,7 @@ let ticker = null;
 let currentRecord = null;
 let records = [];
 let page = 1;
+let quota = null; // 页眉那个数字，开始前的确认要用
 
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
@@ -144,8 +145,16 @@ function setBusy(busy) {
   $("again").disabled = busy;
 }
 
+function confirmStart() {
+  const cost = quota
+    ? `会花掉 ${quota.per} credit，本月还能试穿 ${quota.times} 次。`
+    : "会花掉一次生成的额度（额度查不到）。";
+  return confirm(`开始试穿？\n\n${cost}要等约 80–100 秒。\n\n取消不动图片，也不扣额度。`);
+}
+
 async function submit() {
   if (!files.person || !files.garment) return;
+  if (!confirmStart()) return; // 一次点击就是一条额度，得能反悔
   setBusy(true);
   showTape();
   setUploadPct(0, 0);
@@ -171,11 +180,14 @@ async function loadQuota() {
     const body = await (await fetch("/api/quota")).json();
     if (body.ok) {
       const q = body.quota;
+      quota = { times: q.times_1k, per: body.credits_per_1k };
       el.textContent = `还能试穿 ${q.times_1k} 次 · 一次 ${body.credits_per_1k} credit · ${q.remaining_days} 天后额度重置`;
     } else {
+      quota = null;
       el.textContent = `额度查不到：${body.message}`;
     }
   } catch {
+    quota = null;
     el.textContent = "额度查不到：连不上本机服务。";
   }
 }
