@@ -37,7 +37,7 @@ function startTape() {
   $("tape").hidden = false;
   const step = () => {
     const elapsed = Date.now() - startedAt;
-    setPct(Math.min(90, 100 * (1 - Math.exp((-3 * elapsed) / ESTIMATE_MS))));
+    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS))));
     $("readout").textContent = `生成中 · ${Math.round(elapsed / 1000)} 秒`;
   };
   step();

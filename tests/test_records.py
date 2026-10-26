@@ -1,3 +1,4 @@
+import pathlib
 import re
 from io import BytesIO
 
@@ -91,6 +92,32 @@ def test_delete_rejects_path_that_is_not_a_record_id(root):
     root.mkdir(parents=True)
     assert delete_record(root, "../../etc") is False
     assert delete_record(root, "20261026-113005-ZZZZ") is False
+
+
+def test_record_deleted_mid_read_is_skipped_not_fatal(root, monkeypatch):
+    """图库轮询撞上并发删除：meta.json 刚检查完整就被删掉，不该让整个列表炸。"""
+    save_record(root, "20261026-113005-1f3a", PERSON, GARMENT, RESULT, META)
+    real = pathlib.Path.read_text
+
+    def gone(self, *args, **kwargs):
+        if self.name == "meta.json":
+            raise FileNotFoundError(str(self))
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", gone)
+    assert list_records(root) == []
+
+
+def test_result_is_kept_under_its_real_format(root):
+    """接口哪天改吐 JPEG 时，不该还把它叫 result.png、按 image/png 发出去。"""
+    rid = "20261026-113005-1f3a"
+    jpeg_result = img_bytes(896, 1152, (9, 9, 9), fmt="JPEG")
+    files = save_record(root, rid, PERSON, GARMENT, jpeg_result, META)
+
+    assert (root / rid / "result.jpg").is_file()
+    assert not (root / rid / "result.png").exists()
+    assert files["result"] == f"/files/{rid}/result.jpg"
+    assert list_records(root)[0]["files"]["result"] == f"/files/{rid}/result.jpg"
 
 
 def test_thumb_is_smaller_jpeg(root):

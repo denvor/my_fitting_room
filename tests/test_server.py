@@ -252,3 +252,20 @@ def test_record_save_failure_degrades_to_readable_error(make, tmp_path, monkeypa
     assert r.status_code == 502 and body["ok"] is False and body["stage"] == "result"
     assert "设备上没有空间" in body["message"]
     assert (list(root.iterdir()) if root.exists() else []) == []
+
+
+def test_jpeg_result_is_served_with_real_name(make):
+    """结果图换成 JPEG 字节时，落盘名与 /files 白名单要一起跟上。"""
+    from tryon.qwen_api import Generation as G
+
+    def gen_jpeg(settings, person, garment, timeout=300):
+        return G(image=img_bytes(896, 1152, (5, 6, 7), fmt="JPEG"), width=896, height=1152,
+                 usage=USAGE, request_id="r-j", rewrite_status="success")
+
+    client, root = make(generate_fn=gen_jpeg)
+    rec = client.post("/api/tryon", data=fields()).get_json()["record"]
+    url = rec["files"]["result"]
+
+    assert url.endswith("/result.jpg")
+    r = client.get(url)
+    assert r.status_code == 200 and r.headers["Content-Type"].startswith("image/jpeg")
