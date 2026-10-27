@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from io import BytesIO
 from math import isqrt
 
@@ -28,6 +29,21 @@ VIEW_TIMEOUT = 60
 POLL_INTERVAL = 1.0
 RESOLUTION_STEP = 32
 GENERATION_TIMEOUT = 300  # 本地超时无成本，到点报错就行，不重试也不回落
+CHECK_TIMEOUT = 10
+
+# 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
+# 而"端口通但一跑就错"比"连不上"难查得多
+WEIGHTS: dict[str, tuple[str, str]] = {
+    "UNETLoader": ("unet_name", UNET_NAME),
+    "CLIPLoader": ("clip_name", CLIP_NAME),
+    "VAELoader": ("vae_name", VAE_NAME),
+}
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    ok: bool
+    problems: tuple[str, ...]
 
 
 class ComfyUnavailable(Exception):
@@ -195,6 +211,31 @@ def generate(
         rewrite_status="",
         source="comfyui",
     )
+
+
+def _enum_options(info: dict, cls: str, widget: str) -> list | None:
+    """从 /object_info/<cls> 里取某个 COMBO 输入的可选值列表。"""
+    spec = ((info.get(cls) or {}).get("input", {}).get("required", {}) or {}).get(widget)
+    return spec[0] if isinstance(spec, list) and spec and isinstance(spec[0], list) else None
+
+
+def check(comfy_url: str) -> CheckResult:
+    """设置页那颗按钮：能不能连上、有没有这个节点、权重名对不对，三种坏法分开说。"""
+    url = comfy_url.rstrip("/")
+    try:
+        _get_json(f"{url}/system_stats", CHECK_TIMEOUT)
+        if not _get_json(f"{url}/object_info/TextEncodeQwenImage21", CHECK_TIMEOUT):
+            return CheckResult(False, (f"{url} 这台 ComfyUI 没有 TextEncodeQwenImage21 节点，版本或装法不对",))
+        problems = []
+        for cls, (widget, want) in WEIGHTS.items():
+            options = _enum_options(_get_json(f"{url}/object_info/{cls}", CHECK_TIMEOUT), cls, widget)
+            if options is None:
+                problems.append(f"读不到 {cls} 的 {widget} 可选值，这台 ComfyUI 的接口形状和预期不一样")
+            elif want not in options:
+                problems.append(f"{cls} 的 {widget} 里没有 {want}，权重没下载或名字不同")
+        return CheckResult(not problems, tuple(problems))
+    except (ComfyUnavailable, ComfyRejected) as e:
+        return CheckResult(False, (str(e),))  # 连不上就别一项项试了，每项都会再等 10 秒
 
 
 # —— 以下四个是真传输，测试里整段换掉 ——

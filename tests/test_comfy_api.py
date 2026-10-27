@@ -235,3 +235,88 @@ def test_view_query_carries_filename_subfolder_and_type(wire):
     generate(URL, PERSON, GARMENT, timeout=60)
     url = [c[1] for c in fake.calls if c[0] == "view"][0]
     assert "filename=a.png" in url and "subfolder=tryon" in url and "type=output" in url
+
+
+# --- check()（§7：三种坏法要分开报）---
+
+
+class Serve:
+    """按 URL 尾巴查表吐 /object_info 响应。"""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.urls = []
+
+    def get_json(self, url, timeout):
+        self.urls.append(url)
+        for suffix, payload in self.responses.items():
+            if url.endswith(suffix):
+                if isinstance(payload, Exception):
+                    raise payload
+                return payload
+        raise AssertionError(f"未预期的请求 {url}")
+
+
+def enum_info(cls, widget, names):
+    return {cls: {"input": {"required": {widget: [names, {}]}}}}
+
+
+GOOD = {
+    "/system_stats": {"system": {"comfyui_version": "0.39.0"}},
+    "/object_info/TextEncodeQwenImage21": {"TextEncodeQwenImage21": {"input": {"required": {}}}},
+    "/object_info/UNETLoader": enum_info("UNETLoader", "unet_name", [UNET, "other.safetensors"]),
+    "/object_info/CLIPLoader": enum_info("CLIPLoader", "clip_name", [CLIP]),
+    "/object_info/VAELoader": enum_info("VAELoader", "vae_name", [VAE]),
+}
+
+
+@pytest.fixture
+def serve(monkeypatch):
+    def _serve(responses):
+        s = Serve(responses)
+        monkeypatch.setattr(comfy_api, "_get_json", s.get_json)
+        return s
+
+    return _serve
+
+
+def test_check_passes_when_everything_is_there(serve):
+    s = serve(GOOD)
+    result = comfy_api.check(URL)
+    assert result.ok and result.problems == ()
+    assert any(u.endswith("/system_stats") for u in s.urls)
+
+
+def test_check_reports_unreachable_and_stops(serve):
+    """端口不通就别再查节点和权重了：后面每项都会再超时一次。"""
+    s = serve({"/system_stats": ComfyUnavailable(URL, "Connection refused")})
+    result = comfy_api.check(URL)
+    assert not result.ok and URL in result.problems[0] and len(result.problems) == 1
+    assert len(s.urls) == 1
+
+
+def test_check_reports_missing_text_encode_node(serve):
+    """端口通、但这台没有那个节点：得说清是节点缺失，不是"连不上"。"""
+    serve({**GOOD, "/object_info/TextEncodeQwenImage21": {}})
+    result = comfy_api.check(URL)
+    assert not result.ok and "TextEncodeQwenImage21" in result.problems[0]
+
+
+def test_check_names_the_weight_that_is_missing(serve):
+    """权重文件名对不上要点名是哪个节点哪个值，不然没人知道该改哪儿。"""
+    serve({**GOOD, "/object_info/VAELoader": enum_info("VAELoader", "vae_name", ["something_else.safetensors"])})
+    result = comfy_api.check(URL)
+    assert not result.ok
+    assert "VAELoader" in result.problems[0] and VAE in result.problems[0]
+
+
+def test_check_collects_every_missing_weight_at_once(serve):
+    """两个都对不上就别让人点两次自检。"""
+    serve({
+        **GOOD,
+        "/object_info/UNETLoader": enum_info("UNETLoader", "unet_name", ["nope"]),
+        "/object_info/CLIPLoader": enum_info("CLIPLoader", "clip_name", ["nope"]),
+    })
+    result = comfy_api.check(URL)
+    assert not result.ok and len(result.problems) == 2
+    assert any("UNETLoader" in p for p in result.problems) and any("CLIPLoader" in p for p in result.problems)
