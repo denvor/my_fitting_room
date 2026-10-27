@@ -16,14 +16,15 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 
 - 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，无鉴权，只在你自己网络里用）。
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
-- 两个可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，缺省 `api`）和 `COMFY_URL`（缺省 `http://127.0.0.1:8188`）。
+- 两个可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，**缺省 `comfyui`**）和 `COMFY_URL`（缺省 `http://127.0.0.1:8188`）。
   它们只是默认值，设置页里存的值优先。
 - `.env` 和 `data/` 都不进版本库。
 
 ## 生成来源
 
 「设置 · 换生成来源」（主页顶部那个链接，或直接访问 `settings` 页面）里二选一，存进 `data/settings.json`，
-每个请求现读一次 —— 改完立刻生效，不用重启服务。
+每个请求现读一次 —— 改完立刻生效，不用重启服务。**默认是不花钱的本地**：全新装、或者设置文件读不出时都走
+ComfyUI；它没起来会明确报错，不会悄悄改走 API 花钱（要花钱得你自己在设置页切过去）。
 
 - **token plan API**：`qwen-image-3.0-pro`，一次 58 credit，实测 46–107 秒。
   2026-10-27 16:20 的额度读数：已用 12426 / 25500（48.7%），按 58 一次折算剩约 **225 次**，12 天后重置。
@@ -38,7 +39,8 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 部署在别的机器上时，ComfyUI 地址要填那台机器能到的（比如 frp 映射后的端口），不是 `127.0.0.1`。
 设置页的「测一下能不能连上」会分开告诉你是端口不通、缺 `TextEncodeQwenImage21` 节点、还是权重文件名对不上。
 
-两条边界说明白：**服务无鉴权，局域网内任何设备都能改来源和地址 —— 改成谁，你之后上传的照片就发给谁**；另外 `data/settings.json` 坏到读不出时，会按 `.env` 的默认值（也就是 `api`）走，也就是宁可多花钱也不静默换模型。
+两条边界说明白：**服务无鉴权，局域网内任何设备都能改来源和地址 —— 改成谁，你之后上传的照片就发给谁**；
+另外 `data/settings.json` 坏到读不出时回落到同一个默认（本地），所以不存在"静默被扣 58"那件事。
 
 ## 用法
 
@@ -99,4 +101,7 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 ```
 
 127 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
+`tests/conftest.py` 里有一道 autouse 护栏，把 ComfyUI 的真传输换成"一调就炸"（抛的不是 `Exception`，
+免得被路由的兜底分支吞成一个看起来正常的 502）—— 因为默认来源是本地，测试少注入一个替身就会真的
+连上你自己开着的 ComfyUI，而这种情况曾经真的发生过、并且测试还是绿的。
 端到端验收（真调一次 API 花 58 credit、真跑一次本地不花钱）见两份设计文档的验收节。

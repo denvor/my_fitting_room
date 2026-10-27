@@ -209,3 +209,18 @@ GET  /view?filename=&subfolder=&type=output            → 图片字节
 
 评审另指出规格自相矛盾：**§7「读失败按默认（api）走」与 §4「静默换模型算失败」没调和过**。
 本次取的解释是「宁可多花钱，不静默换模型」，已把这句写进 README；要改行为得回头改 §7。
+
+## 11. 之后：默认来源改成不花钱的那条（使用者 2026-10-27 拍板）
+
+上面那条矛盾的解法不是加警告，而是使用者的一句话：「默认为 comfyui」。于是矛盾消失 —— 设置文件读不出时
+回落的默认本来就不花钱，不存在静默扣费。代价随之确定并被他接受：**全新装、或 ComfyUI 没起时，
+第一次点会明确报错而不是出图**，要花钱那条得自己去设置页切。改动面：`Prefs.source` 与 `Settings.source`
+的缺省值、`.env` 的缺省分支、README、6 条测试的意图。
+
+**这次改动自己捅的娄子，记下来免得重演**：默认一翻成 comfyui，`tests/test_server.py` 里唯一一处没注入
+`comfy_generate_fn` 的 `create_app(SETTINGS, …)`（`test_files_route_works_with_relative_root`）就顺着真实
+默认参数连上了开发者本机活着的 ComfyUI，真生成了两张图 —— **测试仍然是绿的**，唯一征兆是整套跑分从
+1 秒变成 30–96 秒。修法是那个用例自己钉成 api 并注入报错替身；另加 `tests/conftest.py` 的 autouse 护栏，
+把 `comfy_api` 的四个真传输换成抛一个 `BaseException` 子类（故意不是 `Exception`，否则会被路由兜底分支
+吞成一个看起来正常的 502），让同类疏忽当场失败而不是悄悄上网。误生成的两张已从 ComfyUI 输出目录删除，
+Task 9 那张有意的留着。
