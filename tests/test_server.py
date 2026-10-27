@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
+from tryon.comfy_api import ComfyUnavailable
 from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissing
 from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
@@ -53,11 +54,46 @@ def fields(person=PERSON, garment=GARMENT):
     return data
 
 
+COMFY_URL = "http://127.0.0.1:8188"
+
+
+def ok_comfy_generation(comfy_url, person, garment, timeout=300) -> Generation:
+    return Generation(
+        image=RESULT_PNG, width=896, height=1152, usage={"input_image_count": 2, "resolution": 0},
+        request_id="pid-9", rewrite_status="", source="comfyui",
+    )
+
+
+def boom_comfy(comfy_url, person, garment, timeout=300):
+    """没注入本地 fn 时不许静默走通，逼测试自己说清用的是哪条来源。"""
+    raise ComfyUnavailable(comfy_url, "测试没有注入 comfy_generate_fn")
+
+
+def write_prefs(root, source="comfyui", comfy_url=COMFY_URL):
+    (root.parent / "settings.json").write_text(
+        json.dumps({"source": source, "comfy_url": comfy_url}), encoding="utf-8"
+    )
+
+
+class Counter:
+    """包装任一 fn，记下被调了几次（两条来源签名不同，所以用 *args）。"""
+
+    def __init__(self, fn):
+        self.fn, self.calls = fn, 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return self.fn(*args, **kwargs)
+
+
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation, quota_fn=fake_quota):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None):
         root = tmp_path / "records"
-        app = create_app(SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn)
+        app = create_app(
+            SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
+            comfy_generate_fn=comfy_fn or boom_comfy, prefs_file=root.parent / "settings.json",
+        )
         app.testing = True
         return app.test_client(), root
 
@@ -308,3 +344,116 @@ def test_read_timeout_tells_the_user_credits_may_be_gone(make):
     assert body["ok"] is False and body["stage"] == "api"
     assert "read operation timed out" in body["message"]
     assert "58 credit" in body["message"]
+
+
+# --- 来源分派（Task 5）---
+
+
+def test_comfyui_source_calls_local_and_never_api(make):
+    api_calls, comfy_calls = Counter(ok_generation), Counter(ok_comfy_generation)
+    client, root = make(generate_fn=api_calls, comfy_fn=comfy_calls)
+    write_prefs(root)
+
+    body = client.post("/api/tryon", data=fields()).get_json()
+
+    assert body["ok"] is True and api_calls.calls == 0 and comfy_calls.calls == 1
+    assert body["record"]["meta"]["source"] == "comfyui"
+
+
+def test_local_failure_never_falls_back_to_api(make):
+    """Review Focus 第 3 条：静默换模型是在质量线上挖坑。"""
+    api_calls = Counter(ok_generation)
+
+    def boom(comfy_url, person, garment, timeout=300):
+        raise ComfyUnavailable(comfy_url)
+
+    client, root = make(generate_fn=api_calls, comfy_fn=boom)
+    write_prefs(root)
+    r = client.post("/api/tryon", data=fields())
+
+    assert r.status_code == 502 and r.get_json()["stage"] == "comfy"
+    assert api_calls.calls == 0
+
+
+def test_local_failure_message_names_the_address(make):
+    def boom(comfy_url, person, garment, timeout=300):
+        raise ComfyUnavailable(comfy_url)
+
+    client, root = make(comfy_fn=boom)
+    write_prefs(root, comfy_url="http://10.0.0.9:8188")
+
+    assert "http://10.0.0.9:8188" in client.post("/api/tryon", data=fields()).get_json()["message"]
+
+
+def test_corrupt_prefs_file_keeps_api_path(make):
+    """Review Focus 第 4 条：设置文件坏了一半也不能把生成请求带崩。"""
+    client, root = make()
+    (root.parent / "settings.json").write_text('{"source": "com', encoding="utf-8")
+
+    body = client.post("/api/tryon", data=fields()).get_json()
+
+    assert body["ok"] is True and body["record"]["meta"]["source"] == "api"
+
+
+def test_source_is_visible_in_the_record_list(make):
+    """一个月后要能分清哪张是本地出的（§4 反目标第 3 条）。"""
+    client, root = make(comfy_fn=ok_comfy_generation)
+    write_prefs(root)
+    client.post("/api/tryon", data=fields())
+
+    assert client.get("/api/records").get_json()["records"][0]["meta"]["source"] == "comfyui"
+
+
+def test_local_and_api_share_one_task_lock(make):
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_comfy(comfy_url, person, garment, timeout=300):
+        entered.set()
+        release.wait(timeout=5)
+        return ok_comfy_generation(comfy_url, person, garment)
+
+    client, root = make(comfy_fn=slow_comfy)
+    write_prefs(root)
+    results = []
+    first = threading.Thread(target=lambda: results.append(client.post("/api/tryon", data=fields())))
+    first.start()
+    assert entered.wait(timeout=5)
+
+    second = client.post("/api/tryon", data=fields())
+    release.set()
+    first.join(timeout=5)
+
+    assert second.status_code == 409 and second.get_json()["stage"] == "busy"
+
+
+def test_quota_endpoint_skips_cli_for_local_source(make):
+    def never():
+        raise AssertionError("本地来源不该去查 qianwen")
+
+    client, root = make(quota_fn=never)
+    write_prefs(root)
+
+    body = client.get("/api/quota").get_json()
+
+    assert body["ok"] is True and body["source"] == "comfyui" and body["quota"] is None
+
+
+def test_quota_endpoint_reports_source_api_by_default(make):
+    client, _root = make()
+
+    body = client.get("/api/quota").get_json()
+
+    assert body["source"] == "api" and body["quota"]["times_1k"] == 254
+
+
+def test_unexpected_local_error_does_not_claim_credit_loss(make):
+    """兜底文案说"可能已经扣掉 58 credit"在本地路径上是假的，会白吓好人。"""
+
+    def crash(comfy_url, person, garment, timeout=300):
+        raise RuntimeError("显存炸了")
+
+    client, root = make(comfy_fn=crash)
+    write_prefs(root)
+    body = client.post("/api/tryon", data=fields()).get_json()
+
+    assert body["stage"] == "comfy" and "58 credit" not in body["message"] and "不花额度" in body["message"]

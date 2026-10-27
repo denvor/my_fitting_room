@@ -8,7 +8,9 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from tryon import comfy_api
 from tryon.image_prep import ImageRejected, api_size, prepare_upload
+from tryon.prefs import load_prefs
 from tryon.prompt import TRYON_PROMPT
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
@@ -45,11 +47,15 @@ def create_app(
     generate_fn=generate,
     root: Path | str = "data/records",
     quota_fn=read_quota,
+    comfy_generate_fn=comfy_api.generate,
+    prefs_file: Path | str | None = None,
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
     root_path = Path(root).resolve()  # 必须先转绝对路径，否则 send_from_directory 会拼到 app.root_path 上
-    lock = threading.Lock()  # 同一时间只允许一个任务在跑
+    # 设置和记录住同一个 data 目录：dev 与 /mfr 两种入口都自动落对地方
+    prefs_path = Path(prefs_file) if prefs_file else root_path.parent / "settings.json"
+    lock = threading.Lock()  # 同一时间只允许一个任务在跑，两条来源共用这一把
 
     @app.errorhandler(413)
     def too_large(_error):
@@ -61,11 +67,20 @@ def create_app(
 
     @app.get("/api/quota")
     def api_quota():
-        """还剩多少次可用；查不到只是少一行信息，页面照常。"""
+        """还剩多少次可用；查不到只是少一行信息，页面照常。走本地时根本不去查额度。"""
+        if load_prefs(prefs_path).source == "comfyui":
+            return jsonify({"ok": True, "source": "comfyui", "quota": None})
         try:
-            return jsonify({"ok": True, "quota": asdict(quota_fn()), "credits_per_1k": CREDITS_PER_1K})
+            return jsonify(
+                {
+                    "ok": True,
+                    "source": "api",
+                    "quota": asdict(quota_fn()),
+                    "credits_per_1k": CREDITS_PER_1K,
+                }
+            )
         except QuotaUnavailable as e:
-            return jsonify({"ok": False, "message": str(e)})
+            return jsonify({"ok": False, "source": "api", "message": str(e)})
 
     @app.get("/api/records")
     def api_records_list():
@@ -95,8 +110,22 @@ def create_app(
                 return _fail("image", str(e), 400)
 
             started = time.monotonic()
+            prefs = load_prefs(prefs_path)  # 每个请求现读一次：设置页改完立刻生效，不用重启
+            local = prefs.source == "comfyui"
             try:
-                g = generate_fn(settings, person, garment)
+                g = (
+                    comfy_generate_fn(prefs.comfy_url, person, garment)
+                    if local
+                    else generate_fn(settings, person, garment)
+                )
+            except comfy_api.ComfyUnavailable as e:
+                return _fail("comfy", f"{e} 设置页里可以改地址，或者把来源切回 API。", 502)
+            except comfy_api.ComfyRejected as e:
+                return _fail("comfy", f"ComfyUI 报错：{e.detail}", 502)  # 原话透传，不翻译
+            except comfy_api.ComfyTimeout as e:
+                return _fail("comfy", f"本机 ComfyUI {int(e.seconds)} 秒没出图。本地不花额度，可以直接重来一次。", 502)
+            except comfy_api.ComfyResultMissing as e:
+                return _fail("comfy", f"{e}。本地不花额度，可以直接重来一次。", 502)
             except ApiError as e:
                 return _fail("api", e.message, 502, code=e.code, request_id=e.request_id)
             except ResultMissing as e:
@@ -109,6 +138,8 @@ def create_app(
                     result_url=e.url,
                 )
             except Exception as e:
+                if local:  # 本地失败不能报"已扣额度"，那是 API 那条路才有的事
+                    return _fail("comfy", f"本地生成失败：{e}。不花额度，可以直接重来一次。", 502)
                 # 超时多半是服务端还在跑：额度照扣（实测迟到 8 分钟照样扣），图却拿不回来
                 return _fail("api", f"请求接口失败：{e}。这次可能已经扣掉 {CREDITS_PER_1K} credit，图库里不会有这条记录。", 502)
 
@@ -118,7 +149,9 @@ def create_app(
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_s": elapsed,
                 "prompt": TRYON_PROMPT,
-                "size": api_size(person.width, person.height),
+                # 本地那条路由 ComfyUI 自己按参考图比例算尺寸，记真实输出；API 记我们请求的那档
+                "size": f"{g.width}*{g.height}" if local else api_size(person.width, person.height),
+                "source": prefs.source,
                 "usage": g.usage,
                 "request_id": g.request_id,
                 "rewrite_status": g.rewrite_status,
