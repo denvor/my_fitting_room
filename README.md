@@ -26,6 +26,7 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 每个请求现读一次 —— 改完立刻生效，不用重启服务。
 
 - **token plan API**：`qwen-image-3.0-pro`，一次 58 credit，实测 46–107 秒。
+  2026-10-27 16:20 的额度读数：已用 12426 / 25500（48.7%），按 58 一次折算剩约 **225 次**，12 天后重置。
 - **本机 ComfyUI**：`qwen-image-2.1 turbo`，走 `http://<设置页里填的地址>`，不花额度。
   实测同一对样例图同为 1K 档：显存热 20 秒，模型要换进显存时 95 秒。
 
@@ -36,6 +37,8 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 
 部署在别的机器上时，ComfyUI 地址要填那台机器能到的（比如 frp 映射后的端口），不是 `127.0.0.1`。
 设置页的「测一下能不能连上」会分开告诉你是端口不通、缺 `TextEncodeQwenImage21` 节点、还是权重文件名对不上。
+
+两条边界说明白：**服务无鉴权，局域网内任何设备都能改来源和地址 —— 改成谁，你之后上传的照片就发给谁**；另外 `data/settings.json` 坏到读不出时，会按 `.env` 的默认值（也就是 `api`）走，也就是宁可多花钱也不静默换模型。
 
 ## 用法
 
@@ -95,5 +98,5 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 .venv/bin/python -m pytest -q
 ```
 
-123 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
+127 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
 端到端验收（真调一次 API 花 58 credit、真跑一次本地不花钱）见两份设计文档的验收节。
