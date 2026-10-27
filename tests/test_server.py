@@ -9,7 +9,7 @@ from tryon.comfy_api import CheckResult, ComfyUnavailable
 from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissing
 from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
-from tryon.server import create_app
+from tryon.server import STATIC_DIR, create_app
 from tryon.settings import Settings
 
 SETTINGS = Settings(endpoint="https://example.test/generation", api_key="test-key", model="qwen-image-3.0-pro")
@@ -543,6 +543,23 @@ def test_check_endpoint_falls_back_to_stored_url(make):
     client.post("/api/settings/check", json={})
 
     assert seen == ["http://stored:8188"]
+
+
+def test_settings_page_and_js_use_relative_urls():
+    """§6.7 那条静态扫描：设置页自己的 fetch 也不能带前导斜杠。"""
+    html = (STATIC_DIR / "settings.html").read_text(encoding="utf-8")
+    js = (STATIC_DIR / "settings.js").read_text(encoding="utf-8")
+
+    assert 'fetch("api/settings' in js
+    assert '"/api/' not in js and "'/api/" not in js and '"/settings' not in js
+    assert 'src="static/settings.js"' in html
+    assert '"/static/' not in html and '"/settings' not in html
+
+
+def test_index_page_links_to_settings_without_leading_slash(make):
+    client, _ = make()
+
+    assert 'href="settings"' in client.get("/").get_data(as_text=True)
 
 
 def test_settings_page_is_served_with_relative_asset_refs(make):

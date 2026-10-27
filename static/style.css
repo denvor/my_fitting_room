@@ -36,7 +36,28 @@ h1 {
 .lede { margin: .5rem 0 .4rem; color: var(--ink-soft); }
 
 /* 额度那一行：等接口回填，字数会变 */
-.facts { margin: 0 0 2.5rem; font: .85rem/1.7 var(--mono); color: var(--ink-soft); }
+.facts { margin: 0 0 .35rem; font: .85rem/1.7 var(--mono); color: var(--ink-soft); }
+
+.jump { margin: 0 0 2.5rem; font-size: .85rem; }
+.jump a { color: var(--chalk); text-decoration: none; border-bottom: 1px dashed currentColor; }
+
+/* 设置页 */
+.setting { margin: 1.4rem 0 2rem; }
+.setting h2 { font: 600 1.15rem/1.3 var(--serif); letter-spacing: .03em; margin: 0 0 .8rem; }
+.radios { display: grid; gap: .55rem; }
+.radios label { display: flex; align-items: baseline; gap: .5rem; cursor: pointer; }
+.radios .sub { font: .8rem/1.5 var(--mono); color: var(--ink-soft); }
+input.url {
+  font: .95rem/1.4 var(--mono);
+  padding: .6rem .7rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  width: 100%;
+  max-width: 24rem;
+}
+.problems { margin: .9rem 0 0; padding-left: 1.1rem; font: .85rem/1.7 var(--mono); color: var(--stitch); }
+.save-state { align-self: center; font: .85rem/1 var(--mono); color: var(--ink-soft); }
 
 /* 两张取景框 */
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
