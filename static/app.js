@@ -1,6 +1,7 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-const ESTIMATE_MS = 90000; // 实测 1K 档多在 80–100 秒，用它估进度条
+const ESTIMATE_MS = { api: 90000, comfyui: 30000 }; // 两条来源各自的实测中位数，用它估进度条
+let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
 
 const PAGE_SIZE = 5; // 图库每页几条
 
@@ -143,7 +144,7 @@ function startTape(prefix = "生成中") {
   showTape();
   const step = () => {
     const elapsed = Date.now() - startedAt;
-    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS))));
+    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS[genSource]))));
     $("readout").textContent = `${prefix} · ${Math.round(elapsed / 1000)} 秒`;
   };
   step();
@@ -159,6 +160,13 @@ function stopTape() {
 
 function usageLine(meta, elapsed) {
   const u = meta.usage || {};
+  if (meta.source === "comfyui") {
+    // 本地这条没有接口回传的那套档位字段，说清是谁出的、多大、多久就够
+    const local = ["本地 ComfyUI"];
+    if (u.output_width && u.output_height) local.push(`输出 ${u.output_width}×${u.output_height}`);
+    local.push(`用时 ${elapsed} 秒`);
+    return local;
+  }
   const parts = [];
   if (u.output_width && u.output_height) parts.push(`输出 ${u.output_width}×${u.output_height}`);
   if (u.output_image_type) parts.push(`${u.output_image_type.replace("qima_output_", "").toUpperCase()} 档`);
@@ -201,6 +209,9 @@ function setBusy(busy) {
 }
 
 function confirmStart() {
+  if (genSource === "comfyui") {
+    return confirm("开始试穿？\n\n本机 ComfyUI 生成 · 不花额度 · 约 20–95 秒。\n\n取消不动图片。");
+  }
   const cost = quota
     ? `会花掉 ${quota.per} credit，本月还能试穿 ${quota.times} 次。`
     : "会花掉一次生成的额度（额度查不到）。";
@@ -233,6 +244,13 @@ async function loadQuota() {
   const el = $("quota");
   try {
     const body = await (await fetch("api/quota")).json();
+    genSource = body.source === "comfyui" ? "comfyui" : "api";
+    if (genSource === "comfyui") {
+      // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
+      quota = null;
+      el.textContent = "本机 ComfyUI · 不花额度 · 约 20–95 秒";
+      return;
+    }
     if (body.ok) {
       const q = body.quota;
       quota = { times: q.times_1k, per: body.credits_per_1k };
@@ -255,6 +273,11 @@ function recordCell(rec) {
   btn.dataset.person = rec.files.person;
   btn.dataset.garment = rec.files.garment;
   btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
+  const badge = document.createElement("span");
+  badge.className = "src-badge";
+  badge.textContent = rec.meta.source === "comfyui" ? "本地" : "API";
+  badge.setAttribute("aria-hidden", "true"); // 来源在灯箱标题里也有一份，这里只是给眼睛看的
+  btn.append(badge);
   for (const [key, alt] of [["person", "本人照片"], ["garment", "衣服照片"], ["result", "试穿成品"]]) {
     const img = document.createElement("img");
     img.src = key === "result" ? rec.files.thumb : rec.files[key];
