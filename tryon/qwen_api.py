@@ -114,7 +114,7 @@ def generate(
     garment: PreparedImage,
     timeout: int = GENERATION_TIMEOUT,
 ) -> Generation:
-    size = api_size(person.width, person.height)
+    size = api_size(person.width, person.height, settings.size)
     body = build_request(person, garment, size, settings.model)
     status, raw = _post(settings.endpoint, body, settings.api_key, timeout)
 

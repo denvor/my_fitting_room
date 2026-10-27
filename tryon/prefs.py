@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VALID_SOURCES: tuple[str, str] = ("api", "comfyui")
+VALID_SIZES: tuple[str, str] = ("1k", "2k")
+DEFAULT_SIZE = "2k"  # 用户指定的默认档位
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
 
@@ -17,6 +19,7 @@ class Prefs:
     # 默认走本机 ComfyUI：宁可 ComfyUI 没起时明确报错，也不静默花掉 58 credit
     source: str = "comfyui"
     comfy_url: str = DEFAULT_COMFY_URL
+    size: str = DEFAULT_SIZE
 
 
 def load_prefs(file: Path | str, defaults: Prefs | None = None) -> Prefs:
@@ -33,9 +36,11 @@ def load_prefs(file: Path | str, defaults: Prefs | None = None) -> Prefs:
         return base
     source = data.get("source")
     comfy_url = data.get("comfy_url")
+    size = data.get("size")
     return Prefs(
         source=source if source in VALID_SOURCES else base.source,
         comfy_url=comfy_url.strip() if isinstance(comfy_url, str) and comfy_url.strip() else base.comfy_url,
+        size=size if size in VALID_SIZES else base.size,
     )
 
 
@@ -45,7 +50,9 @@ def save_prefs(file: Path | str, prefs: Prefs) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(
-        json.dumps({"source": prefs.source, "comfy_url": prefs.comfy_url}, ensure_ascii=False),
+        json.dumps(
+            {"source": prefs.source, "comfy_url": prefs.comfy_url, "size": prefs.size}, ensure_ascii=False
+        ),
         encoding="utf-8",
     )
     os.replace(tmp, path)

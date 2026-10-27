@@ -79,3 +79,25 @@ def test_illegal_tryon_source_in_env_falls_back_to_default(tmp_path):
         encoding="utf-8",
     )
     assert load_settings(p).source == "comfyui"
+
+
+def _env(tmp_path, extra: str) -> str:
+    p = tmp_path / ".env"
+    p.write_text(f"OPENAI_URL=https://x/compatible-mode/v1\nAPI_KEY=k\nMODEL=m\n{extra}", encoding="utf-8")
+    return str(p)
+
+
+def test_password_and_cookie_secure_read_from_env(tmp_path):
+    s = load_settings(_env(tmp_path, 'TRYON_PASSWORD="feiting-2026"\nTRYON_COOKIE_SECURE=1\n'))
+    assert s.password == "feiting-2026" and s.cookie_secure is True
+
+
+def test_no_password_in_env_means_auth_off(tmp_path):
+    """口令缺省时网关不启用（dev_run 靠这条在局域网里免登录）；公网入口另有 demand_password 拦。"""
+    s = load_settings(_env(tmp_path, ""))
+    assert s.password == "" and s.cookie_secure is False
+
+
+@pytest.mark.parametrize("raw,expected", [("1", True), ("true", True), ("YES", True), ("0", False), ("", False)])
+def test_cookie_secure_accepts_plain_words(tmp_path, raw, expected):
+    assert load_settings(_env(tmp_path, f"TRYON_COOKIE_SECURE={raw}\n")).cookie_secure is expected

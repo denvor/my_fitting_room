@@ -10,6 +10,11 @@ function chosenSource() {
   return hit ? hit.value : "api";
 }
 
+function chosenSize() {
+  const hit = document.querySelector('input[name="size"]:checked');
+  return hit ? hit.value : "2k";
+}
+
 function typedUrl() {
   return $("comfy-url").value.trim();
 }
@@ -56,8 +61,10 @@ async function post(path, payload) {
 async function load() {
   try {
     const body = await (await fetch("api/settings")).json();
-    const hit = document.querySelector(`input[name="source"][value="${body.source}"]`);
-    if (hit) hit.checked = true;
+    for (const [name, value] of [["source", body.source], ["size", body.size || "2k"]]) {
+      const hit = document.querySelector(`input[name="${name}"][value="${value}"]`);
+      if (hit) hit.checked = true;
+    }
     $("comfy-url").value = body.comfy_url || "";
     $("comfy-url").placeholder = body.default_comfy_url || "";
     setState("已保存");
@@ -67,7 +74,7 @@ async function load() {
 }
 
 async function save() {
-  const payload = { source: chosenSource(), comfy_url: typedUrl() };
+  const payload = { source: chosenSource(), comfy_url: typedUrl(), size: chosenSize() };
   const body = await post("api/settings", payload);
   if (!body.ok) {
     showProblems([], `没保存：${body.message || "未知原因"}`);
@@ -91,7 +98,7 @@ async function checkNow() {
   setState("自检没通过");
 }
 
-for (const radio of document.querySelectorAll('input[name="source"]')) {
+for (const radio of document.querySelectorAll('input[name="source"], input[name="size"]')) {
   radio.addEventListener("change", markDirty);
 }
 $("comfy-url").addEventListener("input", markDirty);

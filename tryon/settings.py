@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from tryon.prefs import DEFAULT_COMFY_URL, VALID_SOURCES
+from tryon.prefs import DEFAULT_COMFY_URL, DEFAULT_SIZE, VALID_SIZES, VALID_SOURCES
 
 GENERATION_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 COMPATIBLE_SUFFIX = "/compatible-mode/v1"
@@ -18,6 +18,11 @@ class Settings:
     # 两个可选增强项：.env 里没写就用默认值，不报缺配置
     source: str = "comfyui"
     comfy_url: str = DEFAULT_COMFY_URL
+    # 口令为空 = 登录网关整个不装（局域网开发靠它免登录）；公网入口 mfr_wsgi 会拦住启动
+    password: str = ""
+    # 站在 HTTPS 反代后面时设 TRYON_COOKIE_SECURE=1，登录 cookie 才只走加密通道
+    cookie_secure: bool = False
+    size: str = DEFAULT_SIZE
 
 
 class SettingsError(Exception):
@@ -69,4 +74,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         # 来源写错不拦启动：这是可选增强项，按默认来源走比报错有用
         source=env_source if env_source in VALID_SOURCES else "comfyui",
         comfy_url=values.get("COMFY_URL") or DEFAULT_COMFY_URL,
+        password=values.get("TRYON_PASSWORD", ""),
+        cookie_secure=values.get("TRYON_COOKIE_SECURE", "").lower() in ("1", "true", "yes"),
+        # 档位写错照样不拦启动，按默认档走（和 TRYON_SOURCE 一个道理）
+        size=values.get("TRYON_SIZE") if values.get("TRYON_SIZE") in VALID_SIZES else DEFAULT_SIZE,
     )

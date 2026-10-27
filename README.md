@@ -1,8 +1,8 @@
 # 试衣间
 
 传一张本人照片和一张衣服照片，生成"你穿着这件衣服"的图。本机网页，自己用。
-两条生成来源可选：token plan 的 `qwen-image-3.0-pro`（一次 58 credit），或本机 ComfyUI 的
-`qwen-image-2.1 turbo`（不花额度，显存热时 20 秒、冷时约 95 秒）。
+两条生成来源可选：token plan 的 `qwen-image-3.0-pro`，或本机 ComfyUI 的 `qwen-image-2.1 turbo`（不花额度）。
+输出有 1K / 2K 两档，**默认 2K**（见「输出尺寸」一节）。
 
 设计与实测记录：`docs/superpowers/specs/2026-10-26-qwen-tryon-design.md`（基线）与
 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`（第二个来源）。
@@ -14,11 +14,30 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 .venv/bin/python dev_run.py
 ```
 
-- 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，无鉴权，只在你自己网络里用）。
+- 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，同网络内任何设备都能访问，所以放公网前先看下面「登录」一节）。
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
-- 两个可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，**缺省 `comfyui`**）和 `COMFY_URL`（缺省 `http://127.0.0.1:8188`）。
-  它们只是默认值，设置页里存的值优先。
+- 可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
+  `TRYON_PASSWORD`（登录口令，缺省为空 = 不设登录）、`TRYON_COOKIE_SECURE`（`1` = 登录 cookie 只走 HTTPS）、
+  `TRYON_SIZE`（`1k` 或 `2k`，**缺省 `2k`**）。
+  这几个只是默认值，设置页里存的值优先。
 - `.env` 和 `data/` 都不进版本库。
+
+## 登录
+
+一个共享口令，不做账号体系。`/api/login` 校验口令，通过后发一枚 Flask 自签的 cookie（`mfr_auth`，`HttpOnly`、
+`SameSite=Lax`、30 天），此后所有页面、接口、图片文件都要带上它 —— 拦截是 `tryon/auth.py` 的 `before_request`，
+**在网关这一层，不在前端**：浏览器里的路由守卫挡不住 `curl -X POST .../api/tryon`，那正是会烧额度的那一条。
+放行名单只有三项：登录页、登录接口、静态资源。
+
+- 口令为空时网关整个不装，`python dev_run.py` 在局域网里照旧免登录（启动时会打一行提示）。
+- **公网入口 `mfr_wsgi.py` 没口令直接拒绝启动**，而且拒绝的方式是一页能读的说明，不是一片白屏：
+  在 `.env` 加 `TRYON_PASSWORD=<你的口令>` 再 reload。静默无保护地跑着比启动失败难查得多。
+- 签名密钥存在 `data/secret.key`（首次启动自动生成，权限 `600`），所以重启服务不会把人踢回登录页；
+  删掉这个文件等于所有人的登录作废。
+- 连错 5 次会按来源 IP 冷 15 分钟（`429`，这段时间连对的口令也不放行）。反向代理在前面时，后端看到的
+  是代理的 IP，这一条就退化成全局限速 —— 口令得够长，别用生日。
+- 登录接口只收 JSON，跨站表单发不出 `application/json`，所以顺带挡了 CSRF。口令比对走 `hmac.compare_digest`。
+- 走公网请站在 HTTPS 后面并设 `TRYON_COOKIE_SECURE=1`，否则口令和照片都是明文过网，这一步不是可选的装饰。
 
 ## 生成来源
 
@@ -26,21 +45,40 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 每个请求现读一次 —— 改完立刻生效，不用重启服务。**默认是不花钱的本地**：全新装、或者设置文件读不出时都走
 ComfyUI；它没起来会明确报错，不会悄悄改走 API 花钱（要花钱得你自己在设置页切过去）。
 
-- **token plan API**：`qwen-image-3.0-pro`，一次 58 credit，实测 46–107 秒。
+- **token plan API**：`qwen-image-3.0-pro`，1K 一次 58 credit、2K 一次 108 credit；1K 实测 46–107 秒。
   2026-10-27 16:20 的额度读数：已用 12426 / 25500（48.7%），按 58 一次折算剩约 **225 次**，12 天后重置。
 - **本机 ComfyUI**：`qwen-image-2.1 turbo`，走 `http://<设置页里填的地址>`，不花额度。
   同为 1K 档的三个实测点：896×1152 热显存 **20 秒**、冷显存 **95 秒**，1152×1536（1.77M 像素）冷显存 **145 秒**。
   耗时主要由「显存里还留着哪个模型」和「输出多大」决定，所以这条路的波动比 API 那条更大。
 
 两条路输出的宽高比都跟人相一致，都锁在 1K 档（面积 ≤2,250,000），提示词是同一份 `tryon/prompt.py`。
-图库里每条记录带来源角标（`本地` / `API`），`meta.json` 里有 `source` —— 事后分得清是谁出的。
+图库里每条记录带来源角标（`本地` / `API`），`meta.json` 里有 `source` 和 `band`（`1k` / `2k`）——
+事后分得清是谁出的、出的多大。
 
 **ComfyUI 连不上时只报错，不会偷偷改走 API**：两条路不是一个模型，静默切换是在质量线上挖坑。
 
 部署在别的机器上时，ComfyUI 地址要填那台机器能到的（比如 frp 映射后的端口），不是 `127.0.0.1`。
 设置页的「测一下能不能连上」会分开告诉你是端口不通、缺 `TextEncodeQwenImage21` 节点、还是权重文件名对不上。
 
-两条边界说明白：**服务无鉴权，局域网内任何设备都能改来源和地址 —— 改成谁，你之后上传的照片就发给谁**；
+## 输出尺寸：1K 与 2K
+
+设置页里二选一（`.env` 的 `TRYON_SIZE` 是它的默认值），两条来源共用这一档：
+
+| 档 | 输出总像素上限 | API 单价 | 浏览器上传长边 |
+|---|---|---|---|
+| 1K | 2,250,000 | 58 credit | 1536 |
+| 2K | 4,157,440（= 实测成立的 1792×2320） | 108 credit，**不是 58 的两倍** | 2048 |
+
+- **2K 是目标，不是上限**：选 2K 时输出面积就铺到 2K，参考图小也放大过去（`api_size` 直接把档位当目标，
+  ComfyUI 那条恒给 `resolution=2016`）。1K 档维持原样 —— 按人相自身的像素走、只被上限拦住，那是 §6.6 的质量基线。
+- 放大不产生细节。人相本来只有 896×1152 时，2K 输出是把同一张脸铺大，不是多出纹理；要真细节得给更大的原图，
+  所以上传长边也跟着升到 2048。
+- 页眉的"还能试穿 N 次"按**所选档位**的单价折算，确认框里的 credit 数、失败文案里的扣额度数都跟着档位走。
+- 本地 2K 明显比 1K 慢（1K 实测 20 / 95 / 145 秒），显存不够时会原样报 `CUDA out of memory` 之类的错，
+  不花钱，重来一次就行。超时上限给到 900 秒：那是**上限不是预期**，本地等待没有成本，宁可等久也别误报。
+
+两条边界说明白：**没设口令时服务无鉴权**，局域网内任何设备都能改来源和地址 —— 改成谁，你之后上传的照片就发给谁；
+设了 `TRYON_PASSWORD` 之后这件事归登录管（见上一节）；
 另外 `data/settings.json` 坏到读不出时回落到同一个默认（本地），所以不存在"静默被扣 58"那件事。
 
 ## 用法
@@ -94,6 +132,10 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 - 自检说「`UNETLoader` 的 `unet_name` 里没有 …」：那台 ComfyUI 没下这套权重，本地这条路用不了，切回 API。
 - 本地生成报「`CUDA out of memory`」之类的原话：ComfyUI 显存不够，先关掉别的模型再试。
 - 提示"连不上本机服务"：`dev_run.py` 没在跑。
+- 页面把你送到 `/login`、或接口回 `401 还没登录`：cookie 到期（30 天）或口令换过，重登一次即可。
+- `429 错太多次了，等 N 秒再试`：同一来源连错 5 次的冷却，时间到了自动放行。
+- 部署后**一片空白**：多半是公网入口没口令拒绝启动。屏幕上会写原因（`mfr_wsgi.py` 里那条），照它加 `TRYON_PASSWORD` 再 reload。
+- 每次开页面都要重输口令：`data/secret.key` 没写成（`data/` 不可写），或者被删过。
 
 ## 测试
 
@@ -101,7 +143,7 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 .venv/bin/python -m pytest -q
 ```
 
-127 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
+181 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
 `tests/conftest.py` 里有一道 autouse 护栏，把 ComfyUI 的真传输换成"一调就炸"（抛的不是 `Exception`，
 免得被路由的兜底分支吞成一个看起来正常的 502）—— 因为默认来源是本地，测试少注入一个替身就会真的
 连上你自己开着的 ComfyUI，而这种情况曾经真的发生过、并且测试还是绿的。

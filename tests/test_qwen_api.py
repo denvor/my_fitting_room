@@ -3,7 +3,7 @@ import json
 import pytest
 
 from tryon import qwen_api
-from tryon.image_prep import PreparedImage
+from tryon.image_prep import OUT_MAX_AREA, PreparedImage
 from tryon.prompt import TRYON_PROMPT
 from tryon.qwen_api import (
     ApiError,
@@ -89,7 +89,11 @@ def test_generate_returns_image_and_usage(monkeypatch):
     assert sent[1]["image"].startswith("data:image/jpeg;base64,")
     assert posted[0]["url"] == SETTINGS.endpoint
     assert posted[0]["api_key"] == "test-key"
-    assert posted[0]["body"]["parameters"]["size"] == "896*1152"  # 尺寸按人像图
+    # 尺寸跟着人像图的比例走、铺满所选档位（默认 2K），宽高都是 8 的倍数
+    w, h = (int(x) for x in posted[0]["body"]["parameters"]["size"].split("*"))
+    assert w % 8 == 0 and h % 8 == 0
+    assert abs(w / h - 896 / 1152) < 0.02
+    assert w * h > OUT_MAX_AREA
 
 
 def test_generate_raises_apierror_with_server_message(monkeypatch):

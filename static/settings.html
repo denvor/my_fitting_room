@@ -24,6 +24,16 @@
   </section>
 
   <section class="setting">
+    <h2>输出尺寸</h2>
+    <div class="radios">
+      <label><input type="radio" name="size" value="2k"> 2K · 更大更清楚<span class="sub">API 一次 108 credit · 本地要几分钟</span></label>
+      <label><input type="radio" name="size" value="1k"> 1K · 省额度省时间<span class="sub">API 一次 58 credit · 约 80–100 秒</span></label>
+    </div>
+    <p class="hint">两条来源共用这一档，输出都会铺满所选档位的面积，参考图小也一样（放出来的不是新增的细节）。
+      选 2K 时浏览器把照片压到长边 2048 再上传（1K 是 1536）：出图尺寸不变，但接口和 ComfyUI 看到的输入更清楚。</p>
+  </section>
+
+  <section class="setting">
     <h2>ComfyUI 地址</h2>
     <input id="comfy-url" class="url" type="text" spellcheck="false" autocomplete="off" aria-label="ComfyUI 地址">
     <p class="hint">选了 API 时这一项用不上，但地址仍然要写对格式。</p>

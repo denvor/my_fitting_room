@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 
 CREDITS_PER_1K = 58  # 实测：一次成功的 1K 生成扣 58 credit
+CREDITS_PER_2K = 108  # 实测：1792×2320 一次扣 108，不是 58 的两倍
+CREDITS_BY_SIZE = {"1k": CREDITS_PER_1K, "2k": CREDITS_PER_2K}
 CLI_TIMEOUT = 20
 
 
@@ -15,6 +17,11 @@ class Quota:
     used: float
     times_1k: int
     remaining_days: int
+
+
+def credits_for(size: str) -> int:
+    """这一档一次的单价，页眉和确认框都按它折算。"""
+    return CREDITS_BY_SIZE[size]
 
 
 class QuotaUnavailable(Exception):

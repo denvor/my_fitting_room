@@ -6,6 +6,7 @@ import pytest
 from PIL import Image
 
 from tryon.comfy_api import CheckResult, ComfyUnavailable
+from tryon.image_prep import OUT_MAX_AREA
 from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissing
 from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
@@ -57,14 +58,14 @@ def fields(person=PERSON, garment=GARMENT):
 COMFY_URL = "http://127.0.0.1:8188"
 
 
-def ok_comfy_generation(comfy_url, person, garment, timeout=300) -> Generation:
+def ok_comfy_generation(comfy_url, person, garment, timeout=300, size="1k") -> Generation:
     return Generation(
         image=RESULT_PNG, width=896, height=1152, usage={"input_image_count": 2, "resolution": 0},
         request_id="pid-9", rewrite_status="", source="comfyui",
     )
 
 
-def boom_comfy(comfy_url, person, garment, timeout=300):
+def boom_comfy(comfy_url, person, garment, timeout=300, size="1k"):
     """没注入本地 fn 时不许静默走通，逼测试自己说清用的是哪条来源。"""
     raise ComfyUnavailable(comfy_url, "测试没有注入 comfy_generate_fn")
 
@@ -126,7 +127,10 @@ def test_tryon_happy_path_writes_record(make):
     assert RECORD_ID_RE.fullmatch(body["record"]["id"])
 
     saved = json.loads((root / body["record"]["id"] / "meta.json").read_text(encoding="utf-8"))
-    assert saved["request_id"] == "r-1" and saved["size"] == "896*1152"
+    assert saved["request_id"] == "r-1"
+    # 记的是请求的那一档的尺寸：默认 2K，所以比人像本身大
+    dw, dh = (int(x) for x in saved["size"].split("*"))
+    assert saved["band"] == "2k" and dw % 8 == 0 and dh % 8 == 0 and dw * dh > OUT_MAX_AREA
     assert "图像1" in saved["prompt"]
     assert (root / body["record"]["id"] / "result.png").read_bytes() == RESULT_PNG
 
@@ -355,11 +359,12 @@ def test_read_timeout_tells_the_user_credits_may_be_gone(make):
         raise TimeoutError("The read operation timed out")
 
     client, _ = make(generate_fn=hang)
-    body = client.get_json() if False else client.post("/api/tryon", data=fields()).get_json()
+    body = client.post("/api/tryon", data=fields()).get_json()
 
     assert body["ok"] is False and body["stage"] == "api"
     assert "read operation timed out" in body["message"]
-    assert "58 credit" in body["message"]
+    # 数字跟着所选档位走：默认 2K 就是 108，不是写死的 58
+    assert "108 credit" in body["message"]
 
 
 # --- 来源分派（Task 5）---
@@ -380,7 +385,7 @@ def test_local_failure_never_falls_back_to_api(make):
     """Review Focus 第 3 条：静默换模型是在质量线上挖坑。"""
     api_calls = Counter(ok_generation)
 
-    def boom(comfy_url, person, garment, timeout=300):
+    def boom(comfy_url, person, garment, timeout=300, size="1k"):
         raise ComfyUnavailable(comfy_url)
 
     client, root = make(generate_fn=api_calls, comfy_fn=boom)
@@ -392,7 +397,7 @@ def test_local_failure_never_falls_back_to_api(make):
 
 
 def test_local_failure_message_names_the_address(make):
-    def boom(comfy_url, person, garment, timeout=300):
+    def boom(comfy_url, person, garment, timeout=300, size="1k"):
         raise ComfyUnavailable(comfy_url)
 
     client, root = make(comfy_fn=boom)
@@ -426,7 +431,7 @@ def test_source_is_visible_in_the_record_list(make):
 def test_local_and_api_share_one_task_lock(make):
     entered, release = threading.Event(), threading.Event()
 
-    def slow_comfy(comfy_url, person, garment, timeout=300):
+    def slow_comfy(comfy_url, person, garment, timeout=300, size="1k"):
         entered.set()
         release.wait(timeout=5)
         return ok_comfy_generation(comfy_url, person, garment)
@@ -470,7 +475,7 @@ def test_quota_endpoint_reports_api_when_saved_as_api(make):
 def test_unexpected_local_error_does_not_claim_credit_loss(make):
     """兜底文案说"可能已经扣掉 58 credit"在本地路径上是假的，会白吓好人。"""
 
-    def crash(comfy_url, person, garment, timeout=300):
+    def crash(comfy_url, person, garment, timeout=300, size="1k"):
         raise RuntimeError("显存炸了")
 
     client, root = make(comfy_fn=crash)

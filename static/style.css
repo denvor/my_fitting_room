@@ -236,3 +236,12 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   color: #fff;
   background: rgba(30, 37, 34, .62);
 }
+
+/* 登录页 */
+.login-msg {
+  margin: .7rem 0 0;
+  font: .85rem/1.6 var(--mono);
+  color: var(--ink-soft);
+  min-height: 1.4em;
+}
+.login-msg.bad { color: var(--stitch); }

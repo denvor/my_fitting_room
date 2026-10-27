@@ -1,7 +1,9 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-const ESTIMATE_MS = { api: 90000, comfyui: 60000 }; // 两条来源各自的实测中位数，用它估进度条
+// 进度条的估算基数：来源 × 档位，四个数都是实测中位数（README 的耗时表）
+const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-1k": 60000, "comfyui-2k": 300000 };
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
+let genSize = "2k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
 
 const PAGE_SIZE = 5; // 图库每页几条
 
@@ -14,7 +16,10 @@ let page = 1;
 let quota = null; // 页眉那个数字，开始前的确认要用
 
 const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的原图
-const UPLOAD_MAX_SIDE = 1536; // 服务端本来就把长边缩到这里，先在手机里缩好，省掉几 MB 上行
+// 和后端 prepare_upload 的长边上限一致（表在 tryon/image_prep.py 的 SIDE_BY_SIZE）。
+// 2K 档要 2048：本地那条的输出跟着参考图走，传 1536 就出不了 2K。
+// 解码峰值从约 7MB 涨到约 22MB（2048 长边），仍然有界 —— 全尺寸解码才是手机上卡死的那个。
+const UPLOAD_SIDE = { "1k": 1536, "2k": 2048 };
 const UPLOAD_QUALITY = 0.92; // 和服务端那次重编码对齐，少一次有损压缩
 const previewUrls = { person: "", garment: "" };
 const working = { person: false, garment: false }; // 还在处理的那一格
@@ -76,7 +81,7 @@ async function showPreviewOnly(kind, file) {
 async function uploadFileFor(kind) {
   const original = files[kind];
   try {
-    const bmp = await decodeLongSide(original, UPLOAD_MAX_SIDE);
+    const bmp = await decodeLongSide(original, UPLOAD_SIDE[genSize] || 1536);
     const blob = await jpegFrom(bmp, UPLOAD_QUALITY);
     bmp.close();
     if (blob && blob.size < original.size) {
@@ -169,7 +174,7 @@ function startTape(prefix = "生成中") {
   showTape();
   const step = () => {
     const elapsed = Date.now() - startedAt;
-    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS[genSource]))));
+    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS[`${genSource}-${genSize}`]))));
     $("readout").textContent = `${prefix} · ${Math.round(elapsed / 1000)} 秒`;
   };
   step();
@@ -186,8 +191,9 @@ function stopTape() {
 function usageLine(meta, elapsed) {
   const u = meta.usage || {};
   if (meta.source === "comfyui") {
-    // 本地这条没有接口回传的那套档位字段，说清是谁出的、多大、多久就够
+    // 本地这条没有接口回传的那套档位字段，说清是谁出的、哪一档、多大、多久就够
     const local = ["本地 ComfyUI"];
+    if (meta.band) local.push(meta.band.toUpperCase() + " 档");
     if (u.output_width && u.output_height) local.push(`输出 ${u.output_width}×${u.output_height}`);
     local.push(`用时 ${elapsed} 秒`);
     return local;
@@ -234,13 +240,17 @@ function setBusy(busy) {
 }
 
 function confirmStart() {
+  const band = genSize.toUpperCase();
   if (genSource === "comfyui") {
-    return confirm("开始试穿？\n\n本机 ComfyUI 生成 · 不花额度。\n快则 20 秒；显存冷了或图比较大时可能要两三分钟。\n\n取消不动图片。");
+    return confirm(
+      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度。\n1K 快则 20 秒；2K 要几分钟，显存冷了更久。\n\n取消不动图片。`
+    );
   }
   const cost = quota
-    ? `会花掉 ${quota.per} credit，本月还能试穿 ${quota.times} 次。`
-    : "会花掉一次生成的额度（额度查不到）。";
-  return confirm(`开始试穿？\n\n${cost}要等约 80–100 秒。\n\n取消不动图片，也不扣额度。`);
+    ? `会花掉 ${quota.per} credit（${band} 档），本月还能试穿 ${quota.times} 次。`
+    : `会花掉一次 ${band} 生成的额度（额度查不到）。`;
+  const wait = genSize === "2k" ? "要等约 2–3 分钟。" : "要等约 80–100 秒。";
+  return confirm(`开始试穿？\n\n${cost}${wait}\n\n取消不动图片，也不扣额度。`);
 }
 
 async function submit() {
@@ -271,16 +281,24 @@ async function loadQuota() {
   try {
     const body = await (await fetch("api/quota")).json();
     genSource = body.source === "comfyui" ? "comfyui" : "api";
+    genSize = body.size === "1k" ? "1k" : "2k"; // 后端没回就当默认档，别把上传尺寸压回 1536
     if (genSource === "comfyui") {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
-      el.textContent = "本机 ComfyUI · 不花额度 · 快则 20 秒，冷启动或大图要两三分钟";
+      el.textContent =
+        genSize === "2k"
+          ? "本机 ComfyUI · 2K 档 · 不花额度 · 要几分钟，显存冷了更久"
+          : "本机 ComfyUI · 1K 档 · 不花额度 · 快则 20 秒，冷启动或大图要两三分钟";
       return;
     }
     if (body.ok) {
       const q = body.quota;
-      quota = { times: q.times_1k, per: body.credits_per_1k };
-      el.textContent = `还能试穿 ${q.times_1k} 次 · 一次 ${body.credits_per_1k} credit · ${q.remaining_days} 天后额度重置`;
+      const per = body.credits_per_generation || body.credits_per_1k;
+      // 次数按所选档位折算：2K 一次 108，拿 58 算出来的次数是骗人的
+      quota = { times: q.times || q.times_1k, per };
+      el.textContent =
+        `还能试穿 ${quota.times} 次 · ${genSize.toUpperCase()} 档一次 ${per} credit · ` +
+        `${q.remaining_days} 天后额度重置`;
     } else {
       quota = null;
       el.textContent = `额度查不到：${body.message}`;

@@ -13,7 +13,7 @@ from math import isqrt
 
 from PIL import Image
 
-from tryon.image_prep import OUT_MAX_AREA, PreparedImage
+from tryon.image_prep import PreparedImage, out_area
 from tryon.prompt import TRYON_PROMPT
 from tryon.qwen_api import Generation
 
@@ -28,7 +28,9 @@ HTTP_TIMEOUT = 30
 VIEW_TIMEOUT = 60
 POLL_INTERVAL = 1.0
 RESOLUTION_STEP = 32
-GENERATION_TIMEOUT = 300  # 本地超时无成本，到点报错就行，不重试也不回落
+GENERATION_TIMEOUT = 300  # 1K 档实测最长 145 秒，留一倍余量；本地超时无成本，到点报错就行
+GENERATION_TIMEOUT_2K = 900  # 2K 档像素接近两倍，显存冷了要更久 —— 见 README 的实测点
+TIMEOUT_BY_SIZE = {"1k": GENERATION_TIMEOUT, "2k": GENERATION_TIMEOUT_2K}
 CHECK_TIMEOUT = 10
 
 # 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
@@ -79,11 +81,18 @@ class ComfyResultMissing(Exception):
         self.url = url
 
 
-def comfy_resolution(width: int, height: int) -> int:
-    """`resolution` 是像素预算不是宽高（§6.4）：0 = 按参考图自身尺寸，超一档就向下对齐 32 压回来。"""
-    if width * height <= OUT_MAX_AREA:
+def comfy_resolution(width: int, height: int, size: str = "1k") -> int:
+    """`resolution` 是像素预算不是宽高（§6.4）：0 = 按参考图自身尺寸，超一档就向下对齐 32 压回来。
+
+    预算按档位取：1K 档 2,250,000 → 超了才压到 1472，否则原样出（基线行为）；
+    2K 档 4,157,440 → 恒 2016，参考图小也铺满，所以换档不再要求你先去上传更大的图。
+    """
+    ceiling = out_area(size)
+    if size == "2k":
+        return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
+    if width * height <= ceiling:
         return 0
-    return isqrt(OUT_MAX_AREA) // RESOLUTION_STEP * RESOLUTION_STEP
+    return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
 
 
 def build_graph(person_name: str, garment_name: str, prompt: str, resolution: int, seed: int, prefix: str) -> dict:
@@ -156,10 +165,12 @@ def generate(
     comfy_url: str,
     person: PreparedImage,
     garment: PreparedImage,
-    timeout: int = GENERATION_TIMEOUT,
+    timeout: int | None = None,
+    size: str = "1k",
 ) -> Generation:
     url = comfy_url.rstrip("/")
-    resolution = comfy_resolution(person.width, person.height)
+    limit = timeout if timeout is not None else TIMEOUT_BY_SIZE[size]
+    resolution = comfy_resolution(person.width, person.height, size)
     person_name = _post_multipart(f"{url}/upload/image", "image", "person.jpg", person.data, HTTP_TIMEOUT)
     garment_name = _post_multipart(f"{url}/upload/image", "image", "garment.jpg", garment.data, HTTP_TIMEOUT)
     graph = build_graph(
@@ -175,7 +186,7 @@ def generate(
         entry = _get_json(f"{url}/history/{prompt_id}", HTTP_TIMEOUT).get(prompt_id, {})
         if (entry.get("status") or {}).get("completed"):
             break
-        if waited >= timeout:
+        if waited >= limit:
             raise ComfyTimeout(url, waited)
         _sleep(POLL_INTERVAL)
         waited += POLL_INTERVAL

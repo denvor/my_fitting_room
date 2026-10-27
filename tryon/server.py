@@ -2,7 +2,7 @@
 
 import threading
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,10 +10,11 @@ from urllib.parse import urlsplit
 from flask import Flask, jsonify, request, send_from_directory
 
 from tryon import comfy_api
+from tryon.auth import DEFAULT_SECRET_FILE, init_auth
 from tryon.image_prep import ImageRejected, api_size, prepare_upload
-from tryon.prefs import DEFAULT_COMFY_URL, VALID_SOURCES, Prefs, load_prefs, save_prefs
+from tryon.prefs import DEFAULT_COMFY_URL, VALID_SIZES, VALID_SOURCES, Prefs, load_prefs, save_prefs
 from tryon.prompt import TRYON_PROMPT
-from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, read_quota
+from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
 from tryon.records import (
     FILE_BASENAMES,
@@ -59,14 +60,17 @@ def create_app(
     comfy_generate_fn=comfy_api.generate,
     comfy_check_fn=comfy_api.check,
     prefs_file: Path | str | None = None,
+    secret_file: Path | str | None = None,
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
     root_path = Path(root).resolve()  # 必须先转绝对路径，否则 send_from_directory 会拼到 app.root_path 上
     # 设置和记录住同一个 data 目录：dev 与 /mfr 两种入口都自动落对地方
     prefs_path = Path(prefs_file) if prefs_file else root_path.parent / "settings.json"
+    # 口令为空时网关整个不装，所以连签名密钥都不会去生成（测试不该在 tmp_path 外落文件）
+    init_auth(app, settings, Path(secret_file) if secret_file else DEFAULT_SECRET_FILE, STATIC_DIR)
     # .env 的两个可选键是默认值，设置页存过的值覆盖它们（README 与 §5 都这么承诺）
-    prefs_defaults = Prefs(settings.source, settings.comfy_url)
+    prefs_defaults = Prefs(settings.source, settings.comfy_url, settings.size)
     lock = threading.Lock()  # 同一时间只允许一个任务在跑，两条来源共用这一把
 
     @app.errorhandler(413)
@@ -91,6 +95,8 @@ def create_app(
                 "comfy_url": prefs.comfy_url,
                 "default_comfy_url": DEFAULT_COMFY_URL,
                 "valid_sources": list(VALID_SOURCES),
+                "size": prefs.size,
+                "valid_sizes": list(VALID_SIZES),
             }
         )
 
@@ -98,15 +104,19 @@ def create_app(
     def api_settings_save():
         body = request.get_json(silent=True) or {}
         source, comfy_url = body.get("source"), body.get("comfy_url")
+        # 没带 size 的旧请求保持它现有的档位，别把它悄悄换成默认档
+        size = body.get("size", load_prefs(prefs_path, prefs_defaults).size)
         if source not in VALID_SOURCES:
             return _fail("settings", f"来源只能是 api 或 comfyui，收到的是 {source!r}", 400)
         if not _is_http_url(comfy_url):
             return _fail("settings", "ComfyUI 地址要写成 http://主机:端口，比如 http://127.0.0.1:8188", 400)
+        if size not in VALID_SIZES:
+            return _fail("settings", f"尺寸只能是 1K 或 2K，收到的是 {size!r}", 400)
         try:
-            save_prefs(prefs_path, Prefs(source, comfy_url))
+            save_prefs(prefs_path, Prefs(source, comfy_url, size))
         except OSError as e:  # 存不下来要说出来，别静默回到默认值
             return _fail("settings", f"设置存不下来：{e}", 500)
-        return jsonify({"ok": True, "source": source, "comfy_url": comfy_url})
+        return jsonify({"ok": True, "source": source, "comfy_url": comfy_url, "size": size})
 
     @app.post("/api/settings/check")
     def api_settings_check():
@@ -119,14 +129,21 @@ def create_app(
     @app.get("/api/quota")
     def api_quota():
         """还剩多少次可用；查不到只是少一行信息，页面照常。走本地时根本不去查额度。"""
-        if load_prefs(prefs_path, prefs_defaults).source == "comfyui":
-            return jsonify({"ok": True, "source": "comfyui", "quota": None})
+        prefs = load_prefs(prefs_path, prefs_defaults)
+        if prefs.source == "comfyui":
+            # 走本地不查额度，但档位仍然要回：前端按它决定浏览器压到多大
+            return jsonify({"ok": True, "source": "comfyui", "size": prefs.size, "quota": None})
+        credits = credits_for(prefs.size)
         try:
+            q = quota_fn()
             return jsonify(
                 {
                     "ok": True,
                     "source": "api",
-                    "quota": asdict(quota_fn()),
+                    "size": prefs.size,
+                    # times 按所选档折算：2K 一次 108，别拿 1K 的 58 报次数
+                    "quota": {**asdict(q), "times": max(0, int((q.total - q.used) // credits))},
+                    "credits_per_generation": credits,
                     "credits_per_1k": CREDITS_PER_1K,
                 }
             )
@@ -154,20 +171,22 @@ def create_app(
         if not lock.acquire(blocking=False):
             return _fail("busy", "上一次还在跑，请等它结束", 409)
         try:
+            # 每个请求现读一次：设置页改完立刻生效，不用重启。档位得先知道，因为它决定输入上限
+            prefs = load_prefs(prefs_path, prefs_defaults)
             try:
-                person = prepare_upload(_upload_bytes("person"))
-                garment = prepare_upload(_upload_bytes("garment"))
+                person = prepare_upload(_upload_bytes("person"), prefs.size)
+                garment = prepare_upload(_upload_bytes("garment"), prefs.size)
             except ImageRejected as e:
                 return _fail("image", str(e), 400)
 
             started = time.monotonic()
-            prefs = load_prefs(prefs_path, prefs_defaults)  # 每个请求现读一次：设置页改完立刻生效，不用重启
             local = prefs.source == "comfyui"
             try:
                 g = (
-                    comfy_generate_fn(prefs.comfy_url, person, garment)
+                    comfy_generate_fn(prefs.comfy_url, person, garment, size=prefs.size)
                     if local
-                    else generate_fn(settings, person, garment)
+                    # 档位并进 settings 再交给接口那条路：generate 的签名不动，请求体里的尺寸读 settings.size
+                    else generate_fn(replace(settings, size=prefs.size), person, garment)
                 )
             except comfy_api.ComfyUnavailable as e:
                 return _fail("comfy", f"{e} 设置页里可以改地址，或者把来源切回 API。", 502)
@@ -192,7 +211,11 @@ def create_app(
                 if local:  # 本地失败不能报"已扣额度"，那是 API 那条路才有的事
                     return _fail("comfy", f"本地生成失败：{e}。不花额度，可以直接重来一次。", 502)
                 # 超时多半是服务端还在跑：额度照扣（实测迟到 8 分钟照样扣），图却拿不回来
-                return _fail("api", f"请求接口失败：{e}。这次可能已经扣掉 {CREDITS_PER_1K} credit，图库里不会有这条记录。", 502)
+                return _fail(
+                    "api",
+                    f"请求接口失败：{e}。这次可能已经扣掉 {credits_for(prefs.size)} credit，图库里不会有这条记录。",
+                    502,
+                )
 
             elapsed = round(time.monotonic() - started, 1)
             rid = new_record_id()
@@ -201,7 +224,8 @@ def create_app(
                 "elapsed_s": elapsed,
                 "prompt": TRYON_PROMPT,
                 # 本地那条路由 ComfyUI 自己按参考图比例算尺寸，记真实输出；API 记我们请求的那档
-                "size": f"{g.width}*{g.height}" if local else api_size(person.width, person.height),
+                "size": f"{g.width}*{g.height}" if local else api_size(person.width, person.height, prefs.size),
+                "band": prefs.size,
                 "source": prefs.source,
                 "usage": g.usage,
                 "request_id": g.request_id,
