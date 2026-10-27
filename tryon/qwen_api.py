@@ -24,6 +24,7 @@ class Generation:
     usage: dict
     request_id: str
     rewrite_status: str
+    source: str = "api"  # 两条来源共用这一个结果类型，记录要能事后分清是谁出的
 
 
 class ApiError(Exception):
