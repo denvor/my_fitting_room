@@ -572,3 +572,60 @@ def test_settings_page_is_served_with_relative_asset_refs(make):
     assert r.status_code == 200 and "设置" in page
     assert 'href="static/style.css"' in page
     assert '"/static/' not in page and '"/api/' not in page and '"/settings' not in page
+
+
+# --- 终审修复：.env 的默认值要真的接上（README 承诺过）---
+
+
+def env_app(tmp_path, **over):
+    settings = Settings(endpoint="e", api_key="k", model="m", **over)
+    app = create_app(
+        settings, generate_fn=ok_generation, root=tmp_path / "records", quota_fn=fake_quota,
+        comfy_generate_fn=ok_comfy_generation, prefs_file=tmp_path / "settings.json",
+    )
+    app.testing = True
+    return app.test_client()
+
+
+def test_env_defaults_apply_when_nothing_is_saved(tmp_path):
+    """.env 写了 TRYON_SOURCE/COMFY_URL 而设置页从没存过：这两个值必须生效。"""
+    client = env_app(tmp_path, source="comfyui", comfy_url="http://from-env:8188")
+
+    body = client.get("/api/settings").get_json()
+
+    assert body["source"] == "comfyui" and body["comfy_url"] == "http://from-env:8188"
+
+
+def test_env_default_source_sends_generation_to_comfyui(tmp_path):
+    """光读着对还不算：分派也得按 .env 的默认来源走。"""
+    client = env_app(tmp_path, source="comfyui", comfy_url="http://from-env:8188")
+
+    meta = client.post("/api/tryon", data=fields()).get_json()["record"]["meta"]
+
+    assert meta["source"] == "comfyui"
+
+
+def test_saved_settings_still_win_over_env(tmp_path):
+    """页面里存的值优先于 .env（README 与 §5 都是这么承诺的）。"""
+    client = env_app(tmp_path, source="comfyui", comfy_url="http://from-env:8188")
+    client.post("/api/settings", json={"source": "api", "comfy_url": "http://saved:8188"})
+
+    body = client.get("/api/settings").get_json()
+
+    assert body["source"] == "api" and body["comfy_url"] == "http://saved:8188"
+
+
+def test_quota_header_reports_env_source_without_a_file(tmp_path):
+    """.env 把来源定成本地时，主页不该去查 qianwen。"""
+
+    def never():
+        raise AssertionError("本地来源不该查额度")
+
+    settings = Settings(endpoint="e", api_key="k", model="m", source="comfyui")
+    app = create_app(
+        settings, generate_fn=ok_generation, root=tmp_path / "records", quota_fn=never,
+        comfy_generate_fn=ok_comfy_generation, prefs_file=tmp_path / "settings.json",
+    )
+    app.testing = True
+
+    assert app.test_client().get("/api/quota").get_json()["source"] == "comfyui"

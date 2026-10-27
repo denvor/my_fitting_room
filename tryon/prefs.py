@@ -1,4 +1,7 @@
-"""来源偏好：现在走 token plan API 还是本机 ComfyUI。存 data/settings.json，不用数据库。"""
+"""来源偏好：现在走 token plan API 还是本机 ComfyUI。
+
+存 data/settings.json（不用数据库），.env 提供默认值；每个生成请求现读一次。
+"""
 
 import json
 import os

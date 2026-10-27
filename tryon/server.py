@@ -65,6 +65,8 @@ def create_app(
     root_path = Path(root).resolve()  # 必须先转绝对路径，否则 send_from_directory 会拼到 app.root_path 上
     # 设置和记录住同一个 data 目录：dev 与 /mfr 两种入口都自动落对地方
     prefs_path = Path(prefs_file) if prefs_file else root_path.parent / "settings.json"
+    # .env 的两个可选键是默认值，设置页存过的值覆盖它们（README 与 §5 都这么承诺）
+    prefs_defaults = Prefs(settings.source, settings.comfy_url)
     lock = threading.Lock()  # 同一时间只允许一个任务在跑，两条来源共用这一把
 
     @app.errorhandler(413)
@@ -81,7 +83,7 @@ def create_app(
 
     @app.get("/api/settings")
     def api_settings_read():
-        prefs = load_prefs(prefs_path)
+        prefs = load_prefs(prefs_path, prefs_defaults)
         return jsonify(
             {
                 "ok": True,
@@ -110,14 +112,14 @@ def create_app(
     def api_settings_check():
         """连不上也算正常完成，恒 200：问题是给用户看的清单，不是 HTTP 错误。"""
         body = request.get_json(silent=True) or {}
-        url = body.get("comfy_url") or load_prefs(prefs_path).comfy_url
+        url = body.get("comfy_url") or load_prefs(prefs_path, prefs_defaults).comfy_url
         result = comfy_check_fn(url)
         return jsonify({"ok": result.ok, "problems": list(result.problems)})
 
     @app.get("/api/quota")
     def api_quota():
         """还剩多少次可用；查不到只是少一行信息，页面照常。走本地时根本不去查额度。"""
-        if load_prefs(prefs_path).source == "comfyui":
+        if load_prefs(prefs_path, prefs_defaults).source == "comfyui":
             return jsonify({"ok": True, "source": "comfyui", "quota": None})
         try:
             return jsonify(
@@ -159,7 +161,7 @@ def create_app(
                 return _fail("image", str(e), 400)
 
             started = time.monotonic()
-            prefs = load_prefs(prefs_path)  # 每个请求现读一次：设置页改完立刻生效，不用重启
+            prefs = load_prefs(prefs_path, prefs_defaults)  # 每个请求现读一次：设置页改完立刻生效，不用重启
             local = prefs.source == "comfyui"
             try:
                 g = (

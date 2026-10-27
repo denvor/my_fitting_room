@@ -361,3 +361,9 @@ $("lightbox").addEventListener("click", (e) => { if (e.target === $("lightbox"))
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
 loadGallery();
 loadQuota();
+// 手机从设置页按物理返回键回来时，页面是从 bfcache 直接恢复的，不重跑初始化。
+// 不补这一句的话，来源换了而确认框还写着"不花额度"——那点下去就是 58 credit。
+window.addEventListener("pageshow", () => {
+  loadQuota();
+  loadGallery();
+});
