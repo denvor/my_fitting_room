@@ -1,7 +1,7 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-// 进度条的估算基数：来源 × 档位，四个数都是实测中位数（README 的耗时表）
-const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-1k": 60000, "comfyui-2k": 300000 };
+// 进度条的估算基数：来源 × 档位。api-2k 那个是按像素比推的、没实测，其余三个都有实测点（见 README 耗时表）。
+const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-1k": 60000, "comfyui-2k": 540000 };
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
 let genSize = "1k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
 
@@ -243,7 +243,7 @@ function confirmStart() {
   const band = genSize.toUpperCase();
   if (genSource === "comfyui") {
     return confirm(
-      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度。\n1K 快则 20 秒；2K 要几分钟，显存冷了更久。\n\n取消不动图片。`
+      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度。\n1K 快则 20 秒、冷显存约 145 秒；2K 实测约 9 分钟。\n\n取消不动图片。`
     );
   }
   const cost = quota
@@ -287,7 +287,7 @@ async function loadQuota() {
       quota = null;
       el.textContent =
         genSize === "2k"
-          ? "本机 ComfyUI · 2K 档 · 不花额度 · 要几分钟，显存冷了更久"
+          ? "本机 ComfyUI · 2K 档 · 不花额度 · 实测约 9 分钟"
           : "本机 ComfyUI · 1K 档 · 不花额度 · 快则 20 秒，冷启动或大图要两三分钟";
       return;
     }
