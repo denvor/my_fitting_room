@@ -92,8 +92,12 @@ def ok_check(comfy_url) -> CheckResult:
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None, saved_prefs="api"):
         root = tmp_path / "records"
+        # 默认来源现在是不花钱的那条，所以走 API 的用例要显式存过 api；
+        # saved_prefs=None 才是"从没存过"的初始状态
+        if saved_prefs:
+            write_prefs(root, source=saved_prefs)
         app = create_app(
             SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
             comfy_generate_fn=comfy_fn or boom_comfy, comfy_check_fn=check_fn or ok_check,
@@ -274,7 +278,14 @@ def test_static_assets_are_served(client):
 def test_files_route_works_with_relative_root(tmp_path, monkeypatch):
     """线上 root 是相对路径 data/records，不先转绝对路径会拼到 Flask 的 root_path（tryon/ 包目录）上。"""
     monkeypatch.chdir(tmp_path)
-    app = create_app(SETTINGS, generate_fn=ok_generation, root="records")
+    # 这个用例只关心相对 root。默认来源是 comfyui，所以既要把偏好钉成 api，
+    # 也要注入一个"敢走本地就当场报错"的 comfy fn —— 否则它会连上开发者的真 ComfyUI
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"source": "api", "comfy_url": COMFY_URL}), encoding="utf-8"
+    )
+    app = create_app(
+        SETTINGS, generate_fn=ok_generation, root="records", comfy_generate_fn=boom_comfy
+    )
     app.testing = True
     client = app.test_client()
     rid = client.post("/api/tryon", data=fields()).get_json()["record"]["id"]
@@ -390,14 +401,17 @@ def test_local_failure_message_names_the_address(make):
     assert "http://10.0.0.9:8188" in client.post("/api/tryon", data=fields()).get_json()["message"]
 
 
-def test_corrupt_prefs_file_keeps_api_path(make):
-    """Review Focus 第 4 条：设置文件坏了一半也不能把生成请求带崩。"""
-    client, root = make()
+def test_corrupt_prefs_file_still_serves_and_keeps_default_source(make):
+    """Review Focus 第 4 条：设置文件坏了一半也不能把生成请求带崩。
+
+    坏文件回落到默认 comfyui，所以这条同时证明"读坏"不会静默去花 58 credit。
+    """
+    client, root = make(comfy_fn=ok_comfy_generation)
     (root.parent / "settings.json").write_text('{"source": "com', encoding="utf-8")
 
     body = client.post("/api/tryon", data=fields()).get_json()
 
-    assert body["ok"] is True and body["record"]["meta"]["source"] == "api"
+    assert body["ok"] is True and body["record"]["meta"]["source"] == "comfyui"
 
 
 def test_source_is_visible_in_the_record_list(make):
@@ -443,8 +457,10 @@ def test_quota_endpoint_skips_cli_for_local_source(make):
     assert body["ok"] is True and body["source"] == "comfyui" and body["quota"] is None
 
 
-def test_quota_endpoint_reports_source_api_by_default(make):
+def test_quota_endpoint_reports_api_when_saved_as_api(make):
+    """默认已是 comfyui；存过 api 之后才回去查额度。"""
     client, _root = make()
+    client.post("/api/settings", json={"source": "api", "comfy_url": COMFY_URL})
 
     body = client.get("/api/quota").get_json()
 
@@ -468,11 +484,11 @@ def test_unexpected_local_error_does_not_claim_credit_loss(make):
 
 
 def test_settings_endpoint_returns_defaults(make):
-    client, _ = make()
+    client, _ = make(saved_prefs=None)
 
     body = client.get("/api/settings").get_json()
 
-    assert body["ok"] is True and body["source"] == "api"
+    assert body["ok"] is True and body["source"] == "comfyui"
     assert body["comfy_url"] == body["default_comfy_url"] == "http://127.0.0.1:8188"
     assert body["valid_sources"] == ["api", "comfyui"]
 

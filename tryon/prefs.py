@@ -14,7 +14,8 @@ DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
 @dataclass(frozen=True)
 class Prefs:
-    source: str = "api"
+    # 默认走本机 ComfyUI：宁可 ComfyUI 没起时明确报错，也不静默花掉 58 credit
+    source: str = "comfyui"
     comfy_url: str = DEFAULT_COMFY_URL
 
 

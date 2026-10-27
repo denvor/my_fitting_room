@@ -16,7 +16,7 @@ class Settings:
     api_key: str
     model: str
     # 两个可选增强项：.env 里没写就用默认值，不报缺配置
-    source: str = "api"
+    source: str = "comfyui"
     comfy_url: str = DEFAULT_COMFY_URL
 
 
@@ -67,6 +67,6 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         api_key=values["API_KEY"],
         model=values["MODEL"],
         # 来源写错不拦启动：这是可选增强项，按默认来源走比报错有用
-        source=env_source if env_source in VALID_SOURCES else "api",
+        source=env_source if env_source in VALID_SOURCES else "comfyui",
         comfy_url=values.get("COMFY_URL") or DEFAULT_COMFY_URL,
     )

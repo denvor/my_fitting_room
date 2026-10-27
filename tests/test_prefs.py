@@ -2,15 +2,18 @@ from tryon.prefs import DEFAULT_COMFY_URL, Prefs, load_prefs, save_prefs
 
 
 def test_missing_file_falls_back_to_defaults(tmp_path):
-    """还没有设置文件时不该报错，也不该追问。"""
-    assert load_prefs(tmp_path / "settings.json") == Prefs(source="api", comfy_url=DEFAULT_COMFY_URL)
+    """还没有设置文件时不该报错，也不该追问；默认走不花钱的那条。"""
+    assert load_prefs(tmp_path / "settings.json") == Prefs(source="comfyui", comfy_url=DEFAULT_COMFY_URL)
 
 
-def test_corrupt_file_falls_back_to_api(tmp_path):
-    """半截 JSON 只让来源回到默认，主页不能因此 500。"""
+def test_corrupt_file_falls_back_to_default_source(tmp_path):
+    """半截 JSON 只让来源回到默认（comfyui），主页不能因此 500。
+
+    这条顺带说明为什么"读坏静默换来源"不再是问题：默认就是不花钱的那条。
+    """
     f = tmp_path / "settings.json"
     f.write_text('{"source": "comf', encoding="utf-8")
-    assert load_prefs(f).source == "api"
+    assert load_prefs(f).source == "comfyui"
 
 
 def test_illegal_source_value_uses_default(tmp_path):
@@ -18,7 +21,7 @@ def test_illegal_source_value_uses_default(tmp_path):
     f = tmp_path / "settings.json"
     f.write_text('{"source": "gps", "comfy_url": "http://x:1"}', encoding="utf-8")
     p = load_prefs(f)
-    assert p.source == "api" and p.comfy_url == "http://x:1"  # 单项坏只丢那一项
+    assert p.source == "comfyui" and p.comfy_url == "http://x:1"  # 单项坏只丢那一项
 
 
 def test_non_string_url_uses_default(tmp_path):
@@ -52,7 +55,7 @@ def test_binary_garbage_falls_back(tmp_path):
     """不是坏 JSON 而是根本读不出字符时，同样不能把异常抛到请求里。"""
     f = tmp_path / "settings.json"
     f.write_bytes(b"\xff\xfe\x00\x00")
-    assert load_prefs(f).source == "api"
+    assert load_prefs(f).source == "comfyui"
 
 
 def test_save_creates_missing_parent_dir(tmp_path):
