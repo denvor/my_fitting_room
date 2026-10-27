@@ -1,8 +1,11 @@
 # 试衣间
 
-传一张本人照片和一张衣服照片，调 `qwen-image-3.0-pro` 生成"你穿着这件衣服"的图。本机网页，自己用。
+传一张本人照片和一张衣服照片，生成"你穿着这件衣服"的图。本机网页，自己用。
+两条生成来源可选：token plan 的 `qwen-image-3.0-pro`（一次 58 credit），或本机 ComfyUI 的
+`qwen-image-2.1 turbo`（不花额度，显存热时 20 秒、冷时约 95 秒）。
 
-设计和实测记录见 `docs/superpowers/specs/2026-10-26-qwen-tryon-design.md`。
+设计与实测记录：`docs/superpowers/specs/2026-10-26-qwen-tryon-design.md`（基线）与
+`docs/superpowers/specs/2026-10-27-comfyui-source-design.md`（第二个来源）。
 
 ## 装与起
 
@@ -13,7 +16,26 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 
 - 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，无鉴权，只在你自己网络里用）。
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
+- 两个可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，缺省 `api`）和 `COMFY_URL`（缺省 `http://127.0.0.1:8188`）。
+  它们只是默认值，设置页里存的值优先。
 - `.env` 和 `data/` 都不进版本库。
+
+## 生成来源
+
+「设置 · 换生成来源」（主页顶部那个链接，或直接访问 `settings` 页面）里二选一，存进 `data/settings.json`，
+每个请求现读一次 —— 改完立刻生效，不用重启服务。
+
+- **token plan API**：`qwen-image-3.0-pro`，一次 58 credit，实测 46–107 秒。
+- **本机 ComfyUI**：`qwen-image-2.1 turbo`，走 `http://<设置页里填的地址>`，不花额度。
+  实测同一对样例图同为 1K 档：显存热 20 秒，模型要换进显存时 95 秒。
+
+两条路输出的宽高比都跟人相一致，都锁在 1K 档（面积 ≤2,250,000），提示词是同一份 `tryon/prompt.py`。
+图库里每条记录带来源角标（`本地` / `API`），`meta.json` 里有 `source` —— 事后分得清是谁出的。
+
+**ComfyUI 连不上时只报错，不会偷偷改走 API**：两条路不是一个模型，静默切换是在质量线上挖坑。
+
+部署在别的机器上时，ComfyUI 地址要填那台机器能到的（比如 frp 映射后的端口），不是 `127.0.0.1`。
+设置页的「测一下能不能连上」会分开告诉你是端口不通、缺 `TextEncodeQwenImage21` 节点、还是权重文件名对不上。
 
 ## 用法
 
@@ -21,14 +43,14 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
    （和服务端本来要缩到的尺寸一致，所以手机只传几十 KB 而不是几 MB，接口拿到的像素没变），
    取景框里画 720 宽的缩略图。处理期间格子里写「处理中…」，那时点不动开始按钮。
    浏览器不配合（没有 `createImageBitmap`）就退回原图上传，功能不受影响。
-2. 点「开始试穿」先弹确认（写明这次花多少 credit、本月还能试穿多少次），点确定才真的上传调接口；
+2. 点「开始试穿」先弹确认（走 API 时写明这次花多少 credit、本月还能试穿多少次；走本地时说"不花额度"），点确定才真的上传调接口；
    「再来一次」同样要确认，它一样花钱。
 3. 卷尺先显示**真实**上传进度（`上传中 62% · 4.1/6.6 MB`），传完换成 `已上传，生成中 · N 秒`
    —— 生成那一段接口不给任何进度，只能按 90 秒估，旁边的秒数是真实计时。一张图约 80–100 秒
    （实测最快 46 秒，慢的时候 100 秒往上）。上传进度只覆盖「浏览器 → 本机」这一段；
    「本机 → 接口」那一段接口只回一个最终 JSON，没有流式通道，测不出百分比。
 4. 不满意点「再来一次」，不用重新上传，换随机种子再出一张。同一时间只允许一个任务在跑。
-5. 结果下面那行小字是接口回传的消耗数字（输出尺寸、档位、张数）。
+5. 结果下面那行小字：走 API 时是接口回传的消耗数字（输出尺寸、档位、张数），走本地时写「本地 ComfyUI · 输出 … · 用时 …」。
 6. 图库每页 5 条，底部按 1 2 3 翻页；点缩略图看大图，可以下载或删除整条记录。
 
 图片方向（EXIF Orientation）现在由浏览器压缩那一步定死，不再靠服务端转 —— Chrome/Android 实测正确
@@ -62,6 +84,9 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 - 结果图下载失败：那次额度已经花掉了，页面会把原链接亮出来，24 小时内可以自己另存。
 - `The read operation timed out`：600 秒还没回包。这次额度多半已经扣了，图却拿不回来，图库里也不会有这条。
 - 页眉显示"额度查不到"：`qianwen` 命令没装或不在服务进程的 PATH 上，生成不受影响。
+- 报错里出现「连不上 ComfyUI（http://…）」：ComfyUI 没起、地址填错，或者换了机器没改地址。设置页自检会告具体哪项。
+- 自检说「`UNETLoader` 的 `unet_name` 里没有 …」：那台 ComfyUI 没下这套权重，本地这条路用不了，切回 API。
+- 本地生成报「`CUDA out of memory`」之类的原话：ComfyUI 显存不够，先关掉别的模型再试。
 - 提示"连不上本机服务"：`dev_run.py` 没在跑。
 
 ## 测试
@@ -70,4 +95,5 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 .venv/bin/python -m pytest -q
 ```
 
-67 个测试，全离线（接口调用用替身，不联网）。第 8 节的端到端验收需要真实调一次接口，见设计文档。
+123 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
+端到端验收（真调一次 API 花 58 credit、真跑一次本地不花钱）见两份设计文档的验收节。

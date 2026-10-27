@@ -134,7 +134,7 @@ function postTryon(form, onUploaded) {
       }
     };
     xhr.onerror = () =>
-      resolve({ ok: false, stage: "api", message: "连不上本机服务，确认 python app.py 还开着。" });
+      resolve({ ok: false, stage: "api", message: "连不上本机服务，确认 python dev_run.py 还开着。" });
     xhr.send(form);
   });
 }
