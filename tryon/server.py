@@ -5,12 +5,13 @@ import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, request, send_from_directory
 
 from tryon import comfy_api
 from tryon.image_prep import ImageRejected, api_size, prepare_upload
-from tryon.prefs import load_prefs
+from tryon.prefs import DEFAULT_COMFY_URL, VALID_SOURCES, Prefs, load_prefs, save_prefs
 from tryon.prompt import TRYON_PROMPT
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
@@ -42,12 +43,21 @@ def _upload_bytes(field: str) -> bytes:
     return f.read()
 
 
+def _is_http_url(value) -> bool:
+    """只判形状（scheme + 主机 + 无空格），不判存不存在 —— 那是自检按钮的活。"""
+    if not isinstance(value, str) or not value or value.strip() != value or " " in value:
+        return False
+    parts = urlsplit(value)
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
 def create_app(
     settings: Settings,
     generate_fn=generate,
     root: Path | str = "data/records",
     quota_fn=read_quota,
     comfy_generate_fn=comfy_api.generate,
+    comfy_check_fn=comfy_api.check,
     prefs_file: Path | str | None = None,
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
@@ -64,6 +74,45 @@ def create_app(
     @app.get("/")
     def index():
         return send_from_directory(STATIC_DIR, "index.html")
+
+    @app.get("/settings")
+    def settings_page():
+        return send_from_directory(STATIC_DIR, "settings.html")
+
+    @app.get("/api/settings")
+    def api_settings_read():
+        prefs = load_prefs(prefs_path)
+        return jsonify(
+            {
+                "ok": True,
+                "source": prefs.source,
+                "comfy_url": prefs.comfy_url,
+                "default_comfy_url": DEFAULT_COMFY_URL,
+                "valid_sources": list(VALID_SOURCES),
+            }
+        )
+
+    @app.post("/api/settings")
+    def api_settings_save():
+        body = request.get_json(silent=True) or {}
+        source, comfy_url = body.get("source"), body.get("comfy_url")
+        if source not in VALID_SOURCES:
+            return _fail("settings", f"来源只能是 api 或 comfyui，收到的是 {source!r}", 400)
+        if not _is_http_url(comfy_url):
+            return _fail("settings", "ComfyUI 地址要写成 http://主机:端口，比如 http://127.0.0.1:8188", 400)
+        try:
+            save_prefs(prefs_path, Prefs(source, comfy_url))
+        except OSError as e:  # 存不下来要说出来，别静默回到默认值
+            return _fail("settings", f"设置存不下来：{e}", 500)
+        return jsonify({"ok": True, "source": source, "comfy_url": comfy_url})
+
+    @app.post("/api/settings/check")
+    def api_settings_check():
+        """连不上也算正常完成，恒 200：问题是给用户看的清单，不是 HTTP 错误。"""
+        body = request.get_json(silent=True) or {}
+        url = body.get("comfy_url") or load_prefs(prefs_path).comfy_url
+        result = comfy_check_fn(url)
+        return jsonify({"ok": result.ok, "problems": list(result.problems)})
 
     @app.get("/api/quota")
     def api_quota():

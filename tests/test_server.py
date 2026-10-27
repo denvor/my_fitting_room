@@ -5,7 +5,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from tryon.comfy_api import ComfyUnavailable
+from tryon.comfy_api import CheckResult, ComfyUnavailable
 from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissing
 from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
@@ -86,13 +86,18 @@ class Counter:
         return self.fn(*args, **kwargs)
 
 
+def ok_check(comfy_url) -> CheckResult:
+    return CheckResult(True, ())
+
+
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None):
         root = tmp_path / "records"
         app = create_app(
             SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
-            comfy_generate_fn=comfy_fn or boom_comfy, prefs_file=root.parent / "settings.json",
+            comfy_generate_fn=comfy_fn or boom_comfy, comfy_check_fn=check_fn or ok_check,
+            prefs_file=root.parent / "settings.json",
         )
         app.testing = True
         return app.test_client(), root
@@ -457,3 +462,96 @@ def test_unexpected_local_error_does_not_claim_credit_loss(make):
     body = client.post("/api/tryon", data=fields()).get_json()
 
     assert body["stage"] == "comfy" and "58 credit" not in body["message"] and "不花额度" in body["message"]
+
+
+# --- 设置接口（Task 6）---
+
+
+def test_settings_endpoint_returns_defaults(make):
+    client, _ = make()
+
+    body = client.get("/api/settings").get_json()
+
+    assert body["ok"] is True and body["source"] == "api"
+    assert body["comfy_url"] == body["default_comfy_url"] == "http://127.0.0.1:8188"
+    assert body["valid_sources"] == ["api", "comfyui"]
+
+
+def test_posted_source_takes_effect_without_restart(make):
+    """设置页改完立刻生效：来源是每个请求现读的。"""
+    api_calls, comfy_calls = Counter(ok_generation), Counter(ok_comfy_generation)
+    client, _ = make(generate_fn=api_calls, comfy_fn=comfy_calls)
+
+    assert client.post("/api/settings", json={"source": "comfyui", "comfy_url": COMFY_URL}).status_code == 200
+    client.post("/api/tryon", data=fields())
+
+    assert comfy_calls.calls == 1 and api_calls.calls == 0
+
+
+def test_invalid_source_is_rejected_with_a_readable_message(make):
+    client, _ = make()
+
+    r = client.post("/api/settings", json={"source": "gps", "comfy_url": COMFY_URL})
+    body = r.get_json()
+
+    assert r.status_code == 400 and body["stage"] == "settings" and "api" in body["message"]
+
+
+@pytest.mark.parametrize("bad", ["localhost:8188", "http://a b", "ftp://x", ""])
+def test_comfy_url_must_be_a_plain_http_address(make, bad):
+    """缺协议是这里最容易犯的错，报错要直接给出该长什么样。"""
+    client, _ = make()
+
+    r = client.post("/api/settings", json={"source": "comfyui", "comfy_url": bad})
+
+    assert r.status_code == 400 and "http://" in r.get_json()["message"]
+
+
+def test_save_failure_reports_without_traceback(make, monkeypatch):
+    def boom(file, prefs):
+        raise OSError("设备上没有空间")
+
+    monkeypatch.setattr("tryon.server.save_prefs", boom)
+    client, _ = make()
+
+    r = client.post("/api/settings", json={"source": "comfyui", "comfy_url": COMFY_URL})
+    body = r.get_json()
+
+    assert r.status_code == 500 and body is not None and "设备上没有空间" in body["message"]
+    assert "Traceback" not in body["message"]
+
+
+def test_check_endpoint_returns_problems_and_is_always_200(make):
+    client, _ = make(check_fn=lambda url: CheckResult(False, ("连不上 http://x",)))
+
+    r = client.post("/api/settings/check", json={"comfy_url": "http://x"})
+    body = r.get_json()
+
+    assert r.status_code == 200 and body["ok"] is False and "连不上" in body["problems"][0]
+
+
+def test_check_endpoint_falls_back_to_stored_url(make):
+    seen = []
+
+    def spy(url):
+        seen.append(url)
+        return CheckResult(True, ())
+
+    client, _ = make(check_fn=spy)
+    client.post("/api/settings", json={"source": "comfyui", "comfy_url": "http://stored:8188"})
+
+    client.post("/api/settings/check", json={})
+
+    assert seen == ["http://stored:8188"]
+
+
+def test_settings_page_is_served_with_relative_asset_refs(make):
+    """§6.7：页面里出现带前导斜杠的站内引用，本机好、/mfr 上直接 404。"""
+    client, _ = make()
+
+    r = client.get("/settings")
+    page = r.get_data(as_text=True)
+
+    assert r.status_code == 200 and "设置" in page
+    assert 'href="static/style.css"' in page
+    assert '"/static/' not in page and '"/api/' not in page and '"/settings' not in page
