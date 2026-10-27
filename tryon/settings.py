@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from tryon.prefs import DEFAULT_COMFY_URL, VALID_SOURCES
+
 GENERATION_PATH = "/api/v1/services/aigc/multimodal-generation/generation"
 COMPATIBLE_SUFFIX = "/compatible-mode/v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,9 @@ class Settings:
     endpoint: str
     api_key: str
     model: str
+    # 两个可选增强项：.env 里没写就用默认值，不报缺配置
+    source: str = "api"
+    comfy_url: str = DEFAULT_COMFY_URL
 
 
 class SettingsError(Exception):
@@ -56,8 +61,12 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         if not values.get(required):
             raise SettingsError(f"{path} 里缺少 {required}")
 
+    env_source = values.get("TRYON_SOURCE")
     return Settings(
         endpoint=derive_endpoint(values["OPENAI_URL"]),
         api_key=values["API_KEY"],
         model=values["MODEL"],
+        # 来源写错不拦启动：这是可选增强项，按默认来源走比报错有用
+        source=env_source if env_source in VALID_SOURCES else "api",
+        comfy_url=values.get("COMFY_URL") or DEFAULT_COMFY_URL,
     )
