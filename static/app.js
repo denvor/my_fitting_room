@@ -1,6 +1,6 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-const ESTIMATE_MS = { api: 90000, comfyui: 30000 }; // 两条来源各自的实测中位数，用它估进度条
+const ESTIMATE_MS = { api: 90000, comfyui: 60000 }; // 两条来源各自的实测中位数，用它估进度条
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
 
 const PAGE_SIZE = 5; // 图库每页几条
@@ -17,17 +17,18 @@ const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的
 const UPLOAD_MAX_SIDE = 1536; // 服务端本来就把长边缩到这里，先在手机里缩好，省掉几 MB 上行
 const UPLOAD_QUALITY = 0.92; // 和服务端那次重编码对齐，少一次有损压缩
 const previewUrls = { person: "", garment: "" };
-const working = { person: false, garment: false }; // 还在压缩的那一格
+const working = { person: false, garment: false }; // 还在处理的那一格
 
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    files[kind] = file; // 先记下原图：压缩不配合或失败就按原样上传
+    files[kind] = file; // 上传前一直是原图，压缩推迟到点「开始试穿」之后
+    e.target.value = ""; // 不清空的话，连续选同一张图不会再触发 change
     working[kind] = true;
     setPickLabel(kind);
     readyToGo();
-    prepareImage(kind, file);
+    showPreviewOnly(kind, file);
   });
 }
 
@@ -35,32 +36,56 @@ function setPickLabel(kind) {
   $(`frame-${kind}`).querySelector(".frame-pick").textContent = working[kind] ? "处理中…" : "点这里选图";
 }
 
-async function scaledBlob(bmp, scale, quality) {
+// 只按单维缩放解码：让 JPEG 解码器在解码过程中就降采样。
+// 不带 resize 地全解码一张 12MP 手机照片要 48MB 位图（50MP 是 191MB），
+// 手机上那点内存就是"点了没反应十几秒"的来源 —— 时间倒是小问题。
+async function decodeLongSide(file, longSide) {
+  const probe = await createImageBitmap(file, { resizeWidth: 64 }); // 只为问出长短边
+  const tall = probe.height >= probe.width;
+  probe.close();
+  return createImageBitmap(file, tall ? { resizeHeight: longSide } : { resizeWidth: longSide });
+}
+
+async function jpegFrom(bmp, quality) {
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(bmp.width * scale));
-  canvas.height = Math.max(1, Math.round(bmp.height * scale));
-  canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  canvas.width = bmp.width;
+  canvas.height = bmp.height;
+  canvas.getContext("2d").drawImage(bmp, 0, 0);
   return new Promise((r) => canvas.toBlob(r, "image/jpeg", quality));
 }
 
-// 一次解码出两份：要上传的（长边 ≤1536）和取景框里看的（长边 ≤720）
-async function prepareImage(kind, file) {
+// 选图这一步只做预览（约 2MB 位图），压缩留到提交时 —— 预览不能排在压缩后面
+async function showPreviewOnly(kind, file) {
   const preview = $(`${kind}-preview`);
-  preview.decoding = "async"; // 解码别占主线程，手机上"点了没反应"就是它
+  preview.decoding = "async";
   try {
-    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); // EXIF 方向在这一步定死
-    const long = Math.max(bmp.width, bmp.height);
-    const upload = long > UPLOAD_MAX_SIDE ? await scaledBlob(bmp, UPLOAD_MAX_SIDE / long, UPLOAD_QUALITY) : null;
-    const view = long > PREVIEW_SIDE ? await scaledBlob(bmp, PREVIEW_SIDE / long, 0.85) : null;
+    const bmp = await decodeLongSide(file, PREVIEW_SIDE);
+    const blob = await jpegFrom(bmp, 0.85);
     bmp.close();
-    if (upload) files[kind] = new File([upload], file.name || `${kind}.jpg`, { type: "image/jpeg" });
-    showPreviewBlob(kind, view || upload || file);
+    showPreviewBlob(kind, blob || file);
   } catch {
-    showPreviewBlob(kind, file); // 浏览器不配合就原图上传、原图显示，不能什么都不显示
+    showPreviewBlob(kind, file); // 浏览器不配合就原图显示，不能什么都不显示
   }
   working[kind] = false;
   setPickLabel(kind);
   readyToGo();
+}
+
+// 要上传的那份：从原图缩放解到长边 ≤1536 再编码。压不小（原图本就小/细节少）就用原图，
+// 免得把一张 600px 的图放大到 1536 再被服务端缩回去，白丢一层锐度。
+async function uploadFileFor(kind) {
+  const original = files[kind];
+  try {
+    const bmp = await decodeLongSide(original, UPLOAD_MAX_SIDE);
+    const blob = await jpegFrom(bmp, UPLOAD_QUALITY);
+    bmp.close();
+    if (blob && blob.size < original.size) {
+      return new File([blob], original.name || `${kind}.jpg`, { type: "image/jpeg" });
+    }
+  } catch {
+    /* 原样上传 */
+  }
+  return original;
 }
 
 function showPreviewBlob(kind, blob) {
@@ -210,7 +235,7 @@ function setBusy(busy) {
 
 function confirmStart() {
   if (genSource === "comfyui") {
-    return confirm("开始试穿？\n\n本机 ComfyUI 生成 · 不花额度 · 约 20–95 秒。\n\n取消不动图片。");
+    return confirm("开始试穿？\n\n本机 ComfyUI 生成 · 不花额度。\n快则 20 秒；显存冷了或图比较大时可能要两三分钟。\n\n取消不动图片。");
   }
   const cost = quota
     ? `会花掉 ${quota.per} credit，本月还能试穿 ${quota.times} 次。`
@@ -223,11 +248,12 @@ async function submit() {
   if (!confirmStart()) return; // 一次点击就是一条额度，得能反悔
   setBusy(true);
   showTape();
-  setUploadPct(0, 0);
+  $("readout").textContent = "压缩中…"; // 这一步只在点下去之后发生，选图时不挡手
 
   const form = new FormData();
-  form.append("person", files.person);
-  form.append("garment", files.garment);
+  form.append("person", await uploadFileFor("person"));
+  form.append("garment", await uploadFileFor("garment"));
+  setUploadPct(0, 0);
 
   // 上传段是浏览器给的真实进度；传完才切换到估算的生成进度
   const body = await postTryon(form, () => startTape("已上传，生成中"));
@@ -248,7 +274,7 @@ async function loadQuota() {
     if (genSource === "comfyui") {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
-      el.textContent = "本机 ComfyUI · 不花额度 · 约 20–95 秒";
+      el.textContent = "本机 ComfyUI · 不花额度 · 快则 20 秒，冷启动或大图要两三分钟";
       return;
     }
     if (body.ok) {
