@@ -116,8 +116,8 @@ def test_result_is_kept_under_its_real_format(root):
 
     assert (root / rid / "result.jpg").is_file()
     assert not (root / rid / "result.png").exists()
-    assert files["result"] == f"/files/{rid}/result.jpg"
-    assert list_records(root)[0]["files"]["result"] == f"/files/{rid}/result.jpg"
+    assert files["result"] == f"files/{rid}/result.jpg"
+    assert list_records(root)[0]["files"]["result"] == f"files/{rid}/result.jpg"
 
 
 def test_thumb_is_smaller_jpeg(root):

@@ -76,7 +76,7 @@ def test_tryon_happy_path_writes_record(make):
     body = r.get_json()
 
     assert r.status_code == 200 and body["ok"] is True
-    assert body["record"]["files"]["result"].startswith("/files/")
+    assert body["record"]["files"]["result"].startswith("files/")
     assert body["elapsed_s"] >= 0
     assert RECORD_ID_RE.fullmatch(body["record"]["id"])
 
@@ -186,7 +186,7 @@ def test_records_list_and_delete(make):
 
     listed = client.get("/api/records").get_json()
     assert [r["id"] for r in listed["records"]] == [rid]
-    assert listed["records"][0]["files"]["thumb"] == f"/files/{rid}/thumb.jpg"
+    assert listed["records"][0]["files"]["thumb"] == f"files/{rid}/thumb.jpg"
 
     assert client.delete(f"/api/records/{rid}").status_code == 200
     assert client.get("/api/records").get_json()["records"] == []
@@ -222,7 +222,7 @@ def test_index_page_is_served(client):
     assert r.status_code == 200
     page = r.get_json() if r.is_json else r.get_data(as_text=True)
     assert "你的照片" in page and "衣服照片" in page
-    assert "<script" in page and "/static/app.js" in page
+    assert "<script" in page and "static/app.js" in page
 
 
 def test_static_assets_are_served(client):
