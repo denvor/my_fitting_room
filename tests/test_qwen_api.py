@@ -89,11 +89,11 @@ def test_generate_returns_image_and_usage(monkeypatch):
     assert sent[1]["image"].startswith("data:image/jpeg;base64,")
     assert posted[0]["url"] == SETTINGS.endpoint
     assert posted[0]["api_key"] == "test-key"
-    # 尺寸跟着人像图的比例走、铺满所选档位（默认 2K），宽高都是 8 的倍数
+    # 尺寸跟着人像图的比例走，宽高都是 8 的倍数；默认 1K 所以不越过 1K 上限
     w, h = (int(x) for x in posted[0]["body"]["parameters"]["size"].split("*"))
     assert w % 8 == 0 and h % 8 == 0
     assert abs(w / h - 896 / 1152) < 0.02
-    assert w * h > OUT_MAX_AREA
+    assert w * h <= OUT_MAX_AREA
 
 
 def test_generate_raises_apierror_with_server_message(monkeypatch):

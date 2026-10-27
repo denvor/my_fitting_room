@@ -128,9 +128,9 @@ def test_tryon_happy_path_writes_record(make):
 
     saved = json.loads((root / body["record"]["id"] / "meta.json").read_text(encoding="utf-8"))
     assert saved["request_id"] == "r-1"
-    # 记的是请求的那一档的尺寸：默认 2K，所以比人像本身大
+    # 记的是请求的那一档的尺寸：默认 1K，跟人相自身一致
     dw, dh = (int(x) for x in saved["size"].split("*"))
-    assert saved["band"] == "2k" and dw % 8 == 0 and dh % 8 == 0 and dw * dh > OUT_MAX_AREA
+    assert saved["band"] == "1k" and dw % 8 == 0 and dh % 8 == 0 and dw * dh <= OUT_MAX_AREA
     assert "图像1" in saved["prompt"]
     assert (root / body["record"]["id"] / "result.png").read_bytes() == RESULT_PNG
 
@@ -363,8 +363,8 @@ def test_read_timeout_tells_the_user_credits_may_be_gone(make):
 
     assert body["ok"] is False and body["stage"] == "api"
     assert "read operation timed out" in body["message"]
-    # 数字跟着所选档位走：默认 2K 就是 108，不是写死的 58
-    assert "108 credit" in body["message"]
+    # 数字跟着所选档位走：默认 1K 是 58
+    assert "58 credit" in body["message"]
 
 
 # --- 来源分派（Task 5）---

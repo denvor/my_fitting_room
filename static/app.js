@@ -3,7 +3,7 @@
 // 进度条的估算基数：来源 × 档位，四个数都是实测中位数（README 的耗时表）
 const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-1k": 60000, "comfyui-2k": 300000 };
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
-let genSize = "2k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
+let genSize = "1k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
 
 const PAGE_SIZE = 5; // 图库每页几条
 
@@ -281,7 +281,7 @@ async function loadQuota() {
   try {
     const body = await (await fetch("api/quota")).json();
     genSource = body.source === "comfyui" ? "comfyui" : "api";
-    genSize = body.size === "1k" ? "1k" : "2k"; // 后端没回就当默认档，别把上传尺寸压回 1536
+    genSize = body.size === "2k" ? "2k" : "1k"; // 只认后端回的 2k，其余一律当默认档
     if (genSource === "comfyui") {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;

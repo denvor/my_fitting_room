@@ -12,7 +12,7 @@ function chosenSource() {
 
 function chosenSize() {
   const hit = document.querySelector('input[name="size"]:checked');
-  return hit ? hit.value : "2k";
+  return hit ? hit.value : "1k";
 }
 
 function typedUrl() {

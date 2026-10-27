@@ -108,15 +108,16 @@ def test_comfy_resolution_2k_budget_is_a_multiple_of_32():
 # ---- 档位怎么存 ----
 
 
-def test_default_size_is_2k():
-    assert DEFAULT_SIZE == "2k" and Prefs().size == "2k"
-    assert Settings(endpoint="e", api_key="k", model="m").size == "2k"
+def test_default_size_is_1k():
+    assert DEFAULT_SIZE == "1k" and Prefs().size == "1k"
+    assert Settings(endpoint="e", api_key="k", model="m").size == "1k"
 
 
 def test_prefs_size_round_trips(tmp_path):
     f = tmp_path / "settings.json"
-    save_prefs(f, Prefs("comfyui", "http://127.0.0.1:8188", "1k"))
-    assert load_prefs(f, Prefs()).size == "1k"
+    # 存的是非默认值，才证明这字段真的往返了，而不是回退到默认刚好撞上
+    save_prefs(f, Prefs("comfyui", "http://127.0.0.1:8188", "2k"))
+    assert load_prefs(f, Prefs()).size == "2k"
 
 
 def test_prefs_without_size_field_falls_back_to_default(tmp_path):
@@ -181,6 +182,10 @@ class Recording:
         return Quota(total=25500, used=0.0, times_1k=440, remaining_days=12)
 
 
+SAVED_2K_API = '{"source": "api", "comfy_url": "http://x", "size": "2k"}'
+SAVED_2K_COMFY = '{"source": "comfyui", "comfy_url": "http://x", "size": "2k"}'
+
+
 def make(tmp_path, rec, prefs_text=None, **over):
     settings = Settings(
         endpoint="https://example.test/generation", api_key="k", model="qwen-image-3.0-pro", password="", **over
@@ -212,50 +217,49 @@ def post_tryon(client):
     )
 
 
-def test_api_path_gets_the_selected_band_and_asks_for_2k_size(tmp_path):
+def test_api_path_defaults_to_1k(tmp_path):
     rec = Recording()
     client = make(tmp_path, rec, source="api").test_client()
     post_tryon(client)
-    assert rec.api_settings and rec.api_settings[0].size == "2k"  # .env 没写 → 默认 2K
+    assert rec.api_settings and rec.api_settings[0].size == "1k"  # .env 和设置文件都没写 → 默认 1K
 
 
-def test_api_path_respects_a_saved_1k_choice(tmp_path):
+def test_api_path_honours_a_saved_2k_choice(tmp_path):
     rec = Recording()
-    client = make(tmp_path, rec, prefs_text='{"source": "api", "comfy_url": "http://x", "size": "1k"}').test_client()
+    client = make(tmp_path, rec, prefs_text=SAVED_2K_API).test_client()
     post_tryon(client)
-    assert rec.api_settings[0].size == "1k"
+    assert rec.api_settings[0].size == "2k"
 
 
 def test_local_path_gets_the_selected_band(tmp_path):
     rec = Recording()
-    client = make(tmp_path, rec, source="comfyui").test_client()
+    client = make(tmp_path, rec, prefs_text=SAVED_2K_COMFY).test_client()
     post_tryon(client)
     assert rec.comfy_size == ["2k"]
 
 
 def test_quota_line_prices_the_selected_band(tmp_path):
     rec = Recording()
-    client = make(tmp_path, rec, source="api").test_client()
+    client = make(tmp_path, rec, prefs_text=SAVED_2K_API).test_client()
     body = client.get("/api/quota").get_json()
     assert body["size"] == "2k" and body["credits_per_generation"] == CREDITS_PER_2K
     assert body["quota"]["times"] == int(25500 // CREDITS_PER_2K)  # 按 2K 单价折算，不是 1K
 
 
-def test_quota_line_prices_1k_when_chosen(tmp_path):
+def test_quota_line_prices_1k_by_default(tmp_path):
     rec = Recording()
-    client = make(
-        tmp_path, rec, prefs_text='{"source": "api", "comfy_url": "http://x", "size": "1k"}'
-    ).test_client()
+    client = make(tmp_path, rec, source="api").test_client()
     body = client.get("/api/quota").get_json()
-    assert body["credits_per_generation"] == 58 and body["quota"]["times"] == 439
+    assert body["size"] == "1k" and body["credits_per_generation"] == 58
+    assert body["quota"]["times"] == 439
 
 
 def test_settings_api_accepts_and_validates_size(tmp_path):
     rec = Recording()
     client = make(tmp_path, rec, source="api").test_client()
-    assert client.get("/api/settings").get_json()["size"] == "2k"
-    ok = client.post("/api/settings", json={"source": "api", "comfy_url": "http://x", "size": "1k"})
-    assert ok.status_code == 200 and ok.get_json()["size"] == "1k"
+    assert client.get("/api/settings").get_json()["size"] == "1k"
+    ok = client.post("/api/settings", json={"source": "api", "comfy_url": "http://x", "size": "2k"})
+    assert ok.status_code == 200 and ok.get_json()["size"] == "2k"
     bad = client.post("/api/settings", json={"source": "api", "comfy_url": "http://x", "size": "8k"})
     assert bad.status_code == 400 and "1K" in bad.get_json()["message"]
 
@@ -263,6 +267,6 @@ def test_settings_api_accepts_and_validates_size(tmp_path):
 def test_failure_message_names_the_band_price(tmp_path):
     # 走 API 失败时那句"可能已经扣掉 N credit"必须是本档的价，不是写死的 58
     rec = Recording()
-    client = make(tmp_path, rec, source="api").test_client()
+    client = make(tmp_path, rec, prefs_text=SAVED_2K_API).test_client()
     body = post_tryon(client).get_json()
     assert str(CREDITS_PER_2K) in body["message"] and "58 credit" not in body["message"]

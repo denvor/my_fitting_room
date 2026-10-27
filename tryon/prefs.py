@@ -10,7 +10,7 @@ from pathlib import Path
 
 VALID_SOURCES: tuple[str, str] = ("api", "comfyui")
 VALID_SIZES: tuple[str, str] = ("1k", "2k")
-DEFAULT_SIZE = "2k"  # 用户指定的默认档位
+DEFAULT_SIZE = "1k"  # 默认档：便宜、快；2K 要人在设置页里自己切过去
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
 

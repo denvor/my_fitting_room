@@ -2,7 +2,7 @@
 
 传一张本人照片和一张衣服照片，生成"你穿着这件衣服"的图。本机网页，自己用。
 两条生成来源可选：token plan 的 `qwen-image-3.0-pro`，或本机 ComfyUI 的 `qwen-image-2.1 turbo`（不花额度）。
-输出有 1K / 2K 两档，**默认 2K**（见「输出尺寸」一节）。
+输出有 1K / 2K 两档，**默认 1K**（见「输出尺寸」一节）。
 
 设计与实测记录：`docs/superpowers/specs/2026-10-26-qwen-tryon-design.md`（基线）与
 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`（第二个来源）。
@@ -18,7 +18,7 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
 - 可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
   `TRYON_PASSWORD`（登录口令，缺省为空 = 不设登录）、`TRYON_COOKIE_SECURE`（`1` = 登录 cookie 只走 HTTPS）、
-  `TRYON_SIZE`（`1k` 或 `2k`，**缺省 `2k`**）。
+  `TRYON_SIZE`（`1k` 或 `2k`，**缺省 `1k`**）。
   这几个只是默认值，设置页里存的值优先。
 - `.env` 和 `data/` 都不进版本库。
 
@@ -62,7 +62,7 @@ ComfyUI；它没起来会明确报错，不会悄悄改走 API 花钱（要花�
 
 ## 输出尺寸：1K 与 2K
 
-设置页里二选一（`.env` 的 `TRYON_SIZE` 是它的默认值），两条来源共用这一档：
+设置页里二选一（**默认 1K**）（`.env` 的 `TRYON_SIZE` 是它的默认值），两条来源共用这一档：
 
 | 档 | 输出总像素上限 | API 单价 | 浏览器上传长边 |
 |---|---|---|---|
