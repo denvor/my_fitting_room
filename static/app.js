@@ -14,6 +14,9 @@ let currentRecord = null;
 let records = [];
 let page = 1;
 let quota = null; // 页眉那个数字，开始前的确认要用
+let localBusy = false; // 自己这个请求还在飞
+let serverBusy = null; // 后端的生成锁：{age_s, source}，没人跑时 null —— 按钮按住不按看它
+let busyTimer = null; // 服务端说有任务在跑时，隔几秒再问一次
 
 const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的原图
 // 和后端 prepare_upload 的长边上限一致（表在 tryon/image_prep.py 的 SIDE_BY_SIZE）。
@@ -102,19 +105,27 @@ function showPreviewBlob(kind, blob) {
   $(`frame-${kind}`).classList.add("has-image");
 }
 
+function goDisabled() {
+  // 三个来源任一都按住：图片还在处理、自己这个请求在飞、服务端有任务在跑（后端锁）
+  return Boolean(serverBusy) || localBusy || working.person || working.garment || !(files.person && files.garment);
+}
+
+function hintText() {
+  if (working.person || working.garment) return "图片还在处理…";
+  if (serverBusy)
+    return `上一次还在跑（${serverBusy.source === "comfyui" ? "本地 ComfyUI" : "API"} · 已 ${serverBusy.age_s} 秒），结束前不能再点。`;
+  if (files.person && files.garment) return "";
+  return files.person ? "还差衣服照片。" : files.garment ? "还差本人照片。" : "两张都选好才能开始。";
+}
+
+function applyGoState() {
+  $("go").disabled = goDisabled();
+  $("again").disabled = Boolean(serverBusy) || localBusy;
+  $("need-both").textContent = hintText();
+}
+
 function readyToGo() {
-  const both = Boolean(files.person && files.garment);
-  const busy = working.person || working.garment;
-  $("go").disabled = !both || busy;
-  $("need-both").textContent = busy
-    ? "图片还在处理…"
-    : both
-      ? ""
-      : files.person
-        ? "还差衣服照片。"
-        : files.garment
-          ? "还差你的照片。"
-          : "两张都选好才能开始。";
+  applyGoState();
 }
 
 function setPct(pct) {
@@ -235,8 +246,8 @@ function showError(body) {
 }
 
 function setBusy(busy) {
-  $("go").disabled = busy || !(files.person && files.garment);
-  $("again").disabled = busy;
+  localBusy = busy;
+  applyGoState();
 }
 
 function confirmStart() {
@@ -282,6 +293,14 @@ async function loadQuota() {
     const body = await (await fetch("api/quota")).json();
     genSource = body.source === "comfyui" ? "comfyui" : "api";
     genSize = body.size === "2k" ? "2k" : "1k"; // 只认后端回的 2k，其余一律当默认档
+    // 后端的生成锁。这一条是给"连接被 nginx 掐断"那种情况兜底的：前端只知道请求失败了，
+    // 服务端其实还在跑 —— 按钮得继续按住，过几秒再问一次，跑完顺手把图库刷出来（图本来就在库里）。
+    const wasBusy = serverBusy;
+    serverBusy = body.busy || null;
+    applyGoState();
+    clearTimeout(busyTimer);
+    if (serverBusy) busyTimer = setTimeout(loadQuota, 5000);
+    else if (wasBusy) loadGallery(true);
     if (genSource === "comfyui") {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
@@ -305,6 +324,9 @@ async function loadQuota() {
     }
   } catch {
     quota = null;
+    // 连后端都问不到，就别把按钮永久按住：能不能跑由下一次请求自己告诉你
+    serverBusy = null;
+    applyGoState();
     el.textContent = "额度查不到：连不上本机服务。";
   }
 }

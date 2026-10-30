@@ -99,7 +99,11 @@ ComfyUI；它没起来会明确报错，不会悄悄改走 API 花钱（要花�
    —— 生成那一段接口不给任何进度，只能按 90 秒估，旁边的秒数是真实计时。一张图约 80–100 秒
    （实测最快 46 秒，慢的时候 100 秒往上）。上传进度只覆盖「浏览器 → 本机」这一段；
    「本机 → 接口」那一段接口只回一个最终 JSON，没有流式通道，测不出百分比。
-4. 不满意点「再来一次」，不用重新上传，换随机种子再出一张。同一时间只允许一个任务在跑。
+4. 不满意点「再来一次」，不用重新上传，换随机种子再出一张。**同一时间只允许一个任务在跑**：锁是
+   `data/generating.lock`（不是进程内的 `threading.Lock` —— uWSGI 四个 worker 互相看不见那把锁，
+   两个任务会同时压同一块显存）。有任务在跑时开始按钮按住，提示行写「上一次还在跑（本地 ComfyUI ·
+   已 N 秒）」，这个秒数来自后端，不是前端自己猜的；硬要发请求会拿到 409。拿着锁的进程被杀掉时
+   锁最多可信 30 分钟（`STALE_AFTER_S`，比 2K 的 900 秒上限宽一倍），超时就接管，不会把页面永久锁死。
 5. 结果下面那行小字：走 API 时是接口回传的消耗数字（输出尺寸、档位、张数），走本地时写「本地 ComfyUI · 输出 … · 用时 …」。
 6. 图库每页 5 条，底部按 1 2 3 翻页；点缩略图看大图，可以下载或删除整条记录。
 
@@ -126,6 +130,24 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 `meta.json` 里有时间、耗时、提示词、输出尺寸、接口回传的 `usage` 和 `request_id`。
 接口给的结果图链接 24 小时就失效，所以每次生成完立即下载落盘，之后离线也能看。
 
+## 挂在 uWSGI 上跑
+
+`mfr_wsgi.py` 是给 `/www/webroot/uwsgi/uwsgi.ini` 那个共享实例用的入口（`mount = /mfr=mfr_wsgi:app`，
+另外四个站共一个进程组）。两件事只有在这种部署方式下才会碰到，都记在这儿：
+
+- **路径不能靠当前工作目录**。实例的 `chdir` 是 `/www/webroot`，所以记录目录写死成
+  `settings.PROJECT_ROOT / "data" / "records"`（`PROJECT_ROOT` 由 `__file__` 反推）。
+  留 `"data/records"` 的话，部署实例会把上传的图写到站点根目录去。
+- **超时链是 生成时限 900s < nginx 930s**。原来是 130s（只为盖住 `harakiri = 120` 配的），
+  结果任何一次不算热的本地生成都会被 nginx 先掐：客户端看到失败，worker 继续跑完、图落进图库。
+  2026-10-30 实测那一跑了 224.4 秒，日志里是 `generated 0 bytes ... Broken pipe`。
+  `harakiri` 是实例级的、五个站共用，改不了单个站点（实测它在这个应用上没触发过，但我不敢依赖这点）。
+- **权限写死，不靠 umask**：那个实例的 `Umask` 是 `0000`，交给默认值就会落成 `data/` 777、
+  记录目录 777、`settings.json` 666（里面是人脸原图，同机还跑着别的站）。现在建目录一律 `700`、
+  建文件一律 `600`（`records.py`、`prefs.py`、`joblock.py`、`auth.py` 各自写死）。
+  注意 `Path.mkdir(parents=True, mode=...)` **不会把 mode 传给顺带创建的父目录**，`save_record`
+  里对 `records/` 单独 chmod 过一次，别照着"传了 mode 就完事了"改回去。
+
 ## 出错的时候
 
 结果区显示接口原话，不改写。带上 `code` 和 `request_id` 去查最快：
@@ -138,6 +160,11 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 - 自检说「`UNETLoader` 的 `unet_name` 里没有 …」：那台 ComfyUI 没下这套权重，本地这条路用不了，切回 API。
 - 本地生成报「`CUDA out of memory`」之类的原话：ComfyUI 显存不够，先关掉别的模型再试。
 - 提示"连不上本机服务"：`dev_run.py` 没在跑。
+- `409 上一次还在跑，请等它结束`：真有任务在跑（`data/generating.lock` 被人拿着），不是页面卡住。
+  等它结束就好；**如果这一边的连接被 nginx 掐断过，图其实已经生成完并落进图库了**，刷新后去图库看，
+  页面也会在锁放开的那一刻自己把图库刷出来。
+- 提示行写着「上一次还在跑（已 N 秒）」可 ComfyUI 那边明明早结束了：拿着锁的进程被杀掉了（reload、
+  harakiri、断电）。锁最多可信 30 分钟，到点自动接管；急着用就删掉 `data/generating.lock`。
 - 页面把你送到 `/login`、或接口回 `401 还没登录`：cookie 到期（30 天）或口令换过，重登一次即可。
 - `429 错太多次了，等 N 秒再试`：同一来源连错 5 次的冷却，时间到了自动放行。
 - 部署后**一片空白**：多半是公网入口没口令拒绝启动。屏幕上会写原因（`mfr_wsgi.py` 里那条），照它加 `TRYON_PASSWORD` 再 reload。
@@ -149,7 +176,7 @@ person.jpg   garment.jpg   result.png   thumb.jpg   meta.json
 .venv/bin/python -m pytest -q
 ```
 
-181 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
+195 个测试，全离线：接口和 ComfyUI 的 HTTP 调用都用替身，不联网、也不要求本机真开着 ComfyUI。
 `tests/conftest.py` 里有一道 autouse 护栏，把 ComfyUI 的真传输换成"一调就炸"（抛的不是 `Exception`，
 免得被路由的兜底分支吞成一个看起来正常的 502）—— 因为默认来源是本地，测试少注入一个替身就会真的
 连上你自己开着的 ComfyUI，而这种情况曾经真的发生过、并且测试还是绿的。

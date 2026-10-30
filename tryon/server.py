@@ -1,6 +1,5 @@
 """Flask 服务：一次换装、图库列表与删除、图片文件读取、一个静态页。"""
 
-import threading
 import time
 from dataclasses import asdict, replace
 from datetime import datetime
@@ -12,6 +11,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from tryon import comfy_api
 from tryon.auth import DEFAULT_SECRET_FILE, init_auth
 from tryon.image_prep import ImageRejected, api_size, prepare_upload
+from tryon.joblock import LOCK_NAME, try_acquire, who_holds, release
 from tryon.prefs import DEFAULT_COMFY_URL, VALID_SIZES, VALID_SOURCES, Prefs, load_prefs, save_prefs
 from tryon.prompt import TRYON_PROMPT
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
@@ -34,6 +34,12 @@ def _fail(stage: str, message: str, status: int, **extra):
     body = {"ok": False, "stage": stage, "message": message}
     body.update({k: v for k, v in extra.items() if v})
     return jsonify(body), status
+
+
+def _busy(lock_path: Path):
+    """现在有没有任务在跑、跑了多久、走的哪条来源；没人跑就是 None。"""
+    held = who_holds(lock_path)
+    return None if held is None else {"age_s": held.age_s(), "source": held.source, "pid": held.pid}
 
 
 def _upload_bytes(field: str) -> bytes:
@@ -67,11 +73,12 @@ def create_app(
     root_path = Path(root).resolve()  # 必须先转绝对路径，否则 send_from_directory 会拼到 app.root_path 上
     # 设置和记录住同一个 data 目录：dev 与 /mfr 两种入口都自动落对地方
     prefs_path = Path(prefs_file) if prefs_file else root_path.parent / "settings.json"
+    # 生成锁和设置、密钥住同一个 data 目录：跨 worker 才拦得住（threading.Lock 每进程一把）
+    lock_path = root_path.parent / LOCK_NAME
     # 口令为空时网关整个不装，所以连签名密钥都不会去生成（测试不该在 tmp_path 外落文件）
     init_auth(app, settings, Path(secret_file) if secret_file else DEFAULT_SECRET_FILE, STATIC_DIR)
     # .env 的两个可选键是默认值，设置页存过的值覆盖它们（README 与 §5 都这么承诺）
     prefs_defaults = Prefs(settings.source, settings.comfy_url, settings.size)
-    lock = threading.Lock()  # 同一时间只允许一个任务在跑，两条来源共用这一把
 
     @app.errorhandler(413)
     def too_large(_error):
@@ -128,11 +135,16 @@ def create_app(
 
     @app.get("/api/quota")
     def api_quota():
-        """还剩多少次可用；查不到只是少一行信息，页面照常。走本地时根本不去查额度。"""
+        """还剩多少次可用；查不到只是少一行信息，页面照常。走本地时根本不去查额度。
+
+        顺带回答"现在有没有任务在跑"：页面拿它按住开始按钮 —— 连接被 nginx 掐断的那次，
+        前端只知道请求失败了，服务端却还在跑。
+        """
         prefs = load_prefs(prefs_path, prefs_defaults)
+        busy = _busy(lock_path)
         if prefs.source == "comfyui":
             # 走本地不查额度，但档位仍然要回：前端按它决定浏览器压到多大
-            return jsonify({"ok": True, "source": "comfyui", "size": prefs.size, "quota": None})
+            return jsonify({"ok": True, "source": "comfyui", "size": prefs.size, "quota": None, "busy": busy})
         credits = credits_for(prefs.size)
         try:
             q = quota_fn()
@@ -145,10 +157,11 @@ def create_app(
                     "quota": {**asdict(q), "times": max(0, int((q.total - q.used) // credits))},
                     "credits_per_generation": credits,
                     "credits_per_1k": CREDITS_PER_1K,
+                    "busy": busy,
                 }
             )
         except QuotaUnavailable as e:
-            return jsonify({"ok": False, "source": "api", "message": str(e)})
+            return jsonify({"ok": False, "source": "api", "message": str(e), "busy": busy})
 
     @app.get("/api/records")
     def api_records_list():
@@ -168,11 +181,11 @@ def create_app(
 
     @app.post("/api/tryon")
     def api_tryon():
-        if not lock.acquire(blocking=False):
+        # 每个请求现读一次：设置页改完立刻生效，不用重启。档位得先知道，因为它决定输入上限
+        prefs = load_prefs(prefs_path, prefs_defaults)
+        if not try_acquire(lock_path, prefs.source):
             return _fail("busy", "上一次还在跑，请等它结束", 409)
         try:
-            # 每个请求现读一次：设置页改完立刻生效，不用重启。档位得先知道，因为它决定输入上限
-            prefs = load_prefs(prefs_path, prefs_defaults)
             try:
                 person = prepare_upload(_upload_bytes("person"), prefs.size)
                 garment = prepare_upload(_upload_bytes("garment"), prefs.size)
@@ -239,6 +252,6 @@ def create_app(
                 {"ok": True, "elapsed_s": elapsed, "record": {"id": rid, "meta": meta, "files": files}}
             )
         finally:
-            lock.release()
+            release(lock_path)  # 失败、超时、落盘出错都得还锁，否则页面永久点不动
 
     return app
