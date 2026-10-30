@@ -252,6 +252,50 @@ def test_secret_file_is_created_once_and_not_world_readable(tmp_path):
     assert secret.read_bytes() == first
 
 
+def test_late_worker_adopts_the_secret_that_already_landed(tmp_path, monkeypatch):
+    """uWSGI 起四个 worker，同一个瞬间都发现密钥文件还不存在：慢一步的那个不许把自己那份盖上去。
+    否则 A 签的 cookie 在 B 身上验不过，登录的人会时好时坏地被踢回登录页 —— 线上真的撞上过。"""
+    secret = tmp_path / "secret.key"
+    first = auth.load_secret(secret)
+    tokens = iter(["a" * 64, "b" * 64])
+    monkeypatch.setattr(auth.secrets, "token_hex", lambda n: next(tokens))
+    lied = []
+    real_exists = auth.Path.exists
+
+    def exists(self):
+        # 只在"我能不能走早退分支"这一次撒谎：并发时检查的那一刻对方确实还没落成
+        if self == secret and not lied:
+            lied.append(1)
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(auth.Path, "exists", exists)
+    assert auth.load_secret(secret) == first, "晚到的 worker 自己生成了一把，cookie 会在 worker 之间失效"
+    assert secret.read_text(encoding="utf-8").strip() == first
+    assert not list(tmp_path.glob("*.tmp"))  # 中途失败的临时文件不该留下
+
+
+def test_secret_file_survives_losing_the_publish_race(tmp_path, monkeypatch):
+    """抢先落成的那个 worker 赢了，我这个 worker 的发布该安静地失败、然后采用它那份 —— 不是炸掉。
+    线上炸过一次：临时文件用的是共享名字，被先动手的人 rename 走，剩下的一群 worker 停在降级页（8 个请求 5 个 500）。"""
+    secret = tmp_path / "secret.key"
+    other = "b" * 64
+    secret.write_text(other, encoding="utf-8")
+    real_exists = auth.Path.exists
+    lied = []
+
+    def exists(self):  # 假装检查的那一刻它还不存在，就是并发时的样子
+        if self == secret and not lied:
+            lied.append(1)
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(auth.Path, "exists", exists)
+    assert auth.load_secret(secret) == other
+    assert secret.read_text(encoding="utf-8") == other  # 没被人盖掉
+    assert not list(tmp_path.glob("*.tmp"))  # 输家的临时文件要清干净
+
+
 def test_empty_secret_file_is_not_silently_replaced(tmp_path):
     """静默换钥匙 = 所有人被踢下线，还得查半天，所以要当场说清楚怎么办。"""
     secret = tmp_path / "secret.key"

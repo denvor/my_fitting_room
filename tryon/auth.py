@@ -51,19 +51,34 @@ class _Failures:
             self._hits.pop(ip, None)
 
 
+def _read_secret(secret_file: Path) -> str:
+    raw = secret_file.read_text(encoding="utf-8").strip()
+    if not raw:
+        raise ValueError(f"{secret_file} 是空的：删掉这个文件再重启即可（所有人需要重新登录一次）。")
+    return raw
+
+
 def load_secret(secret_file: Path) -> str:
-    """签名密钥存在文件里：服务重启不该把正在生成的页面踢回登录页，密钥也不进版本库（data/ 已 gitignore）。"""
+    """签名密钥存在文件里：服务重启不该把正在生成的页面踢回登录页，密钥也不进版本库（data/ 已 gitignore）。
+
+    多 worker 会同时走到这里（uWSGI 起四个 worker 就是四次），所以要"谁先落地谁算、晚到的采用那一份"：
+    各自生成一把的话，A 发的 cookie 在 B 身上验不过，登录的人会时好时坏地被踢回登录页。
+    落盘用 os.link 而不是 os.replace —— 目标已存在时 link 直接失败，绝不覆盖；
+    临时文件带进程号，别人搬不走，也就不会出现 rename 时 ENOENT 把整个 worker 顶成降级页。
+    """
     if secret_file.exists():
-        raw = secret_file.read_text(encoding="utf-8").strip()
-        if not raw:
-            raise ValueError(f"{secret_file} 是空的：删掉这个文件再重启即可（所有人需要重新登录一次）。")
-        return raw
+        return _read_secret(secret_file)
     secret_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp = secret_file.with_name(secret_file.name + ".tmp")
+    tmp = secret_file.with_name(f"{secret_file.name}.{os.getpid()}.tmp")
     tmp.write_text(secrets.token_hex(32), encoding="utf-8")
     os.chmod(tmp, 0o600)
-    os.replace(tmp, secret_file)
-    return secret_file.read_text(encoding="utf-8")
+    try:
+        os.link(tmp, secret_file)  # 原子：已存在就 FileExistsError，不会把别人的钥匙换掉
+    except FileExistsError:
+        pass  # 有 worker 抢先落成了，下面读它那一份
+    finally:
+        tmp.unlink(missing_ok=True)
+    return _read_secret(secret_file)
 
 
 def demand_password(settings: Settings) -> None:
