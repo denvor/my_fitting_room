@@ -252,6 +252,14 @@ def test_secret_file_is_created_once_and_not_world_readable(tmp_path):
     assert secret.read_bytes() == first
 
 
+def test_secret_dir_is_not_world_writable(tmp_path, daemon_umask):
+    """密钥文件本身早就 chmod 600 了，但它所在的 data/ 目录在 umask 0 下会落成 777 ——
+    同目录里还有用户上传的原图。建目录时也要显式收紧。"""
+    secret = tmp_path / "data" / "secret.key"
+    auth.load_secret(secret)
+    assert secret.parent.stat().st_mode & 0o077 == 0, oct(secret.parent.stat().st_mode & 0o777)
+
+
 def test_late_worker_adopts_the_secret_that_already_landed(tmp_path, monkeypatch):
     """uWSGI 起四个 worker，同一个瞬间都发现密钥文件还不存在：慢一步的那个不许把自己那份盖上去。
     否则 A 签的 cookie 在 B 身上验不过，登录的人会时好时坏地被踢回登录页 —— 线上真的撞上过。"""

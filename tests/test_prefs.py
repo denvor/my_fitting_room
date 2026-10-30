@@ -62,3 +62,11 @@ def test_save_creates_missing_parent_dir(tmp_path):
     f = tmp_path / "data" / "settings.json"
     save_prefs(f, Prefs("api", DEFAULT_COMFY_URL))
     assert f.is_file()
+
+
+def test_saved_settings_are_owner_only_under_a_zero_umask(tmp_path, daemon_umask):
+    """线上实测这个文件落成了 666（uWSGI 的 umask 是 0000）：设置里存的是生成来源和 ComfyUI 地址。"""
+    f = tmp_path / "data" / "settings.json"
+    save_prefs(f, Prefs("api", DEFAULT_COMFY_URL, "2k"))
+    assert f.stat().st_mode & 0o077 == 0, oct(f.stat().st_mode & 0o777)
+    assert f.parent.stat().st_mode & 0o077 == 0, oct(f.parent.stat().st_mode & 0o777)

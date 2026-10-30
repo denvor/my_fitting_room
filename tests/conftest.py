@@ -6,6 +6,8 @@
 需要假传输的测试（tests/test_comfy_api.py）自己 monkeypatch 覆盖，顺序上晚于本 fixture。
 """
 
+import os
+
 import pytest
 
 from tryon import comfy_api
@@ -14,6 +16,21 @@ from tryon import comfy_api
 class RealComfyTraffic(BaseException):
     """故意不是 Exception：路由里的兜底 except Exception 会把它吞成一个像样的 502，
     那等于"测试悄悄上网但仍然是绿的"。让它穿透兜底，粗心的用例当场失败。"""
+
+
+@pytest.fixture
+def daemon_umask():
+    """把进程 umask 设成 uWSGI 主进程那一套（实测 /proc/<master>/status 里是 Umask: 0000）。
+
+    开发者自己的 shell 是 022，所以"忘了显式收紧权限"这种问题在本地测试里永远看不出来；
+    线上真实落成了 data/ 777、records/<id>/ 777、settings.json 666 —— 里面是人脸原图，
+    而这台机同时还跑着另外四个站。需要验证权限的用例挂这个 fixture。
+    """
+    old = os.umask(0o000)
+    try:
+        yield
+    finally:
+        os.umask(old)
 
 
 @pytest.fixture(autouse=True)

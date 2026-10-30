@@ -47,7 +47,8 @@ def load_prefs(file: Path | str, defaults: Prefs | None = None) -> Prefs:
 def save_prefs(file: Path | str, prefs: Prefs) -> None:
     """先写临时文件再 replace：别让半截设置文件把默认值带跑。写失败不兜，让调用方报错。"""
     path = Path(file)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # 700/600 写死，理由同 records.py：uWSGI 的 umask 是 0000，这里曾经落成过目录 777 + 文件 666
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(
         json.dumps(
@@ -55,4 +56,5 @@ def save_prefs(file: Path | str, prefs: Prefs) -> None:
         ),
         encoding="utf-8",
     )
+    os.chmod(tmp, 0o600)  # os.replace 保留源文件的权限
     os.replace(tmp, path)

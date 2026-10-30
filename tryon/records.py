@@ -1,6 +1,7 @@
 """试穿记录的落盘、列表与删除：一条记录一个目录，不用数据库。"""
 
 import json
+import os
 import re
 import secrets
 import shutil
@@ -11,6 +12,10 @@ from pathlib import Path
 from PIL import Image
 
 RECORD_ID_RE = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
+# 记录里是用户上传的人脸原图，所以权限写死而不是靠 umask（uWSGI 主进程的 umask 实测 0000）：
+# 只有跑服务的那个账号读得动。prefs.py 与 auth.py 建 data/ 时用的是同一套数字。
+RECORD_DIR_MODE = 0o700
+RECORD_FILE_MODE = 0o600
 _FILE_SUFFIX = {"person": "jpg", "garment": "jpg", "result": "png", "thumb": "jpg"}
 THUMB_LONG_SIDE = 320
 # 结果图按接口实际返回的格式命名，不硬写成 .png
@@ -48,14 +53,26 @@ def save_record(
     if not RECORD_ID_RE.fullmatch(rid):
         raise ValueError(f"非法记录名：{rid}")
     d = root / rid
-    d.mkdir(parents=True)
+    # 目录 700、文件 600：显式写死，不靠 umask。uWSGI 主进程的 umask 实测是 0000，
+    # 交给它的话人脸原图会落成 777/666，而同机器上还跑着别的站（2026-10-30 线上就是这样）。
+    # Path.mkdir 的 parents=True 不会把 mode 传给顺带创建的父目录，所以 root 单独来一遍。
+    root.mkdir(parents=True, exist_ok=True, mode=RECORD_DIR_MODE)
+    os.chmod(root, RECORD_DIR_MODE)
+    d.mkdir(mode=RECORD_DIR_MODE)
     result_name = result_filename(result)
     meta = {**meta, "result_name": result_name}
-    (d / "person.jpg").write_bytes(person)
-    (d / "garment.jpg").write_bytes(garment)
-    (d / result_name).write_bytes(result)
-    (d / "thumb.jpg").write_bytes(make_thumb(result))
-    (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    written = [
+        (d / "person.jpg", person),
+        (d / "garment.jpg", garment),
+        (d / result_name, result),
+        (d / "thumb.jpg", make_thumb(result)),
+    ]
+    for path, blob in written:
+        path.write_bytes(blob)
+        os.chmod(path, RECORD_FILE_MODE)
+    meta_path = d / "meta.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    os.chmod(meta_path, RECORD_FILE_MODE)
     return _files_of(rid, result_name)
 
 

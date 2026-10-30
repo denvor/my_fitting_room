@@ -40,6 +40,17 @@ def test_save_then_list_roundtrip_keeps_meta(root):
     assert got[0]["meta"]["elapsed_s"] == 56.2
 
 
+def test_records_are_owner_only_under_a_zero_umask(root, daemon_umask):
+    """一条记录一个目录，里面是用户上传的人脸原图 —— 不该让同机其他账号读走。"""
+    rid = "20261030-113005-1f3a"
+    save_record(root, rid, PERSON, GARMENT, RESULT, META)
+    assert root.stat().st_mode & 0o077 == 0, f"records 根目录 {oct(root.stat().st_mode & 0o777)}"
+    d = root / rid
+    assert d.stat().st_mode & 0o077 == 0, f"记录目录 {oct(d.stat().st_mode & 0o777)}"
+    for f in sorted(d.iterdir()):
+        assert f.stat().st_mode & 0o077 == 0, f"{f.name} {oct(f.stat().st_mode & 0o777)}"
+
+
 def test_saved_files_are_readable(root):
     rid = "20261026-113005-1f3a"
     save_record(root, rid, PERSON, GARMENT, RESULT, META)

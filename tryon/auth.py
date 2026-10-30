@@ -68,7 +68,7 @@ def load_secret(secret_file: Path) -> str:
     """
     if secret_file.exists():
         return _read_secret(secret_file)
-    secret_file.parent.mkdir(parents=True, exist_ok=True)
+    secret_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)  # 700 写死：见 records.py 里那段理由
     tmp = secret_file.with_name(f"{secret_file.name}.{os.getpid()}.tmp")
     tmp.write_text(secrets.token_hex(32), encoding="utf-8")
     os.chmod(tmp, 0o600)
