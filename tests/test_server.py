@@ -70,10 +70,11 @@ def boom_comfy(comfy_url, person, garment, timeout=300, size="1k"):
     raise ComfyUnavailable(comfy_url, "测试没有注入 comfy_generate_fn")
 
 
-def write_prefs(root, source="comfyui", comfy_url=COMFY_URL):
-    (root.parent / "settings.json").write_text(
-        json.dumps({"source": source, "comfy_url": comfy_url}), encoding="utf-8"
-    )
+def write_prefs(root, source="comfyui", comfy_url=COMFY_URL, size=None):
+    data = {"source": source, "comfy_url": comfy_url}
+    if size:
+        data["size"] = size
+    (root.parent / "settings.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 class Counter:
@@ -93,12 +94,12 @@ def ok_check(comfy_url) -> CheckResult:
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None, saved_prefs="api"):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None, saved_prefs="api", size=None):
         root = tmp_path / "records"
         # 默认来源现在是不花钱的那条，所以走 API 的用例要显式存过 api；
         # saved_prefs=None 才是"从没存过"的初始状态
         if saved_prefs:
-            write_prefs(root, source=saved_prefs)
+            write_prefs(root, source=saved_prefs, size=size)
         app = create_app(
             SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
             comfy_generate_fn=comfy_fn or boom_comfy, comfy_check_fn=check_fn or ok_check,
@@ -128,11 +129,25 @@ def test_tryon_happy_path_writes_record(make):
 
     saved = json.loads((root / body["record"]["id"] / "meta.json").read_text(encoding="utf-8"))
     assert saved["request_id"] == "r-1"
-    # 记的是请求的那一档的尺寸：默认 1K，跟人相自身一致
+    # 记的是真正落盘那张的尺寸：默认 1K，跟人相自身一致
     dw, dh = (int(x) for x in saved["size"].split("*"))
     assert saved["band"] == "1k" and dw % 8 == 0 and dh % 8 == 0 and dw * dh <= OUT_MAX_AREA
     assert "图像1" in saved["prompt"]
     assert (root / body["record"]["id"] / "result.png").read_bytes() == RESULT_PNG
+
+
+def test_record_size_is_what_the_api_returned_not_what_we_asked(make):
+    """2026-10-31 实测：请求 size=496*616，接口回传 output_width/height = 896×1152。
+
+    它往下不出小图，所以记录里写"我们请求的那个数"会有时候是假的 —— 一律以回传为准。
+    """
+    client, root = make(size="2k")
+    body = client.post("/api/tryon", data=fields()).get_json()
+
+    saved = json.loads((root / body["record"]["id"] / "meta.json").read_text(encoding="utf-8"))
+    assert saved["band"] == "2k", "档位仍然是我们请求的那一档，这个字段不该跟着变"
+    assert saved["size"] == "896*1152", "记的必须是接口/ComfyUI 真回的那张，不是我们想要的那张"
+    assert body["record"]["meta"]["size"] == saved["size"]
 
 
 def test_tryon_bad_image_reports_stage_image_not_500(client):

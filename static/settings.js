@@ -23,6 +23,18 @@ function setState(text) {
   $("save-state").textContent = text;
 }
 
+// 480p 是本地专属：接口按面积分档、最低就是 1K（实测请求 0.31M 照样扣 58，出的还是参考图尺寸）。
+// 这里按住不给选，后端 clamp_size 还会再收一次，两边说的是同一件事。
+function applySourceLock() {
+  const low = document.querySelector('input[name="size"][value="480p"]');
+  if (!low) return;
+  low.disabled = chosenSource() === "api";
+  if (low.disabled && low.checked) {
+    document.querySelector('input[name="size"][value="1k"]').checked = true;
+    setState("480p 只有本机 ComfyUI 有这一档，已改回 1K");
+  }
+}
+
 function markDirty() {
   dirty = true;
   setState("有没保存的改动");
@@ -68,6 +80,7 @@ async function load() {
     $("comfy-url").value = body.comfy_url || "";
     $("comfy-url").placeholder = body.default_comfy_url || "";
     setState("已保存");
+    applySourceLock(); // 放在后面：它要是改回了 1K，那句提示不该被"已保存"盖掉
   } catch {
     setState("读不到现有设置：确认本机服务还开着");
   }
@@ -83,7 +96,7 @@ async function save() {
   }
   clearProblems();
   dirty = false;
-  setState("已保存");
+  setState(body.size_note || "已保存"); // 后端把 480p 收成 1K 时，它给的那句原样亮出来
 }
 
 async function checkNow() {
@@ -99,7 +112,10 @@ async function checkNow() {
 }
 
 for (const radio of document.querySelectorAll('input[name="source"], input[name="size"]')) {
-  radio.addEventListener("change", markDirty);
+  radio.addEventListener("change", () => {
+    markDirty();
+    applySourceLock(); // 来源一切到 API，480p 就不该还留在选中状态
+  });
 }
 $("comfy-url").addEventListener("input", markDirty);
 $("save").addEventListener("click", save);

@@ -15,10 +15,14 @@ MAX_INPUT_RATIO = 10.0          # 接口输入长宽比上限
 OUT_MIN_AREA = 512 * 512        # 接口输出总像素下限
 OUT_MAX_AREA = 2_250_000        # 1K 档上限：超过就进 2K 计费
 OUT_MAX_AREA_2K = 4_157_440     # 2K 档上限 = 实测成立的 1792×2320（扣 108 credit，不是 58 的两倍）
+OUT_MAX_AREA_480P = 307_200     # 480p = 480×640：本地同机实测 26.0/26.1/26.2 秒（1K 是 95 秒）
 OUT_MAX_RATIO = 8.0             # 接口输出长宽比上限
 DIM_STEP = 8
-AREA_BY_SIZE = {"1k": OUT_MAX_AREA, "2k": OUT_MAX_AREA_2K}
-SIDE_BY_SIZE = {"1k": MAX_SIDE, "2k": MAX_SIDE_2K}
+AREA_BY_SIZE = {"480p": OUT_MAX_AREA_480P, "1k": OUT_MAX_AREA, "2k": OUT_MAX_AREA_2K}
+SIDE_BY_SIZE = {"480p": MAX_SIDE, "1k": MAX_SIDE, "2k": MAX_SIDE_2K}
+# 输入那一侧的上限单独一张表：480p 只降输出预算，输入照 1K 收。
+# 实测输入 1.77M / 0.79M / 0.31M 三种都是 26 秒 —— 缩输入一分时间都不省，只会少喂给模型条件。
+INPUT_AREA_BY_SIZE = {"480p": OUT_MAX_AREA, "1k": OUT_MAX_AREA, "2k": OUT_MAX_AREA_2K}
 JPEG_QUALITY = 92
 
 
@@ -42,6 +46,11 @@ def out_area(size: str) -> int:
 def max_side(size: str) -> int:
     """这一档允许的输入长边。2K 档要给到 2048，不然输入像素不够，输出也就到不了 2K。"""
     return SIDE_BY_SIZE[size]
+
+
+def input_area(size: str) -> int:
+    """上传图允许的总像素上限 —— 和 out_area 分开，因为 480p 只缩输出、不缩输入。"""
+    return INPUT_AREA_BY_SIZE[size]
 
 
 def _floor_step(value: float) -> int:
@@ -68,8 +77,8 @@ def prepare_upload(raw: bytes, size: str = "1k") -> PreparedImage:
     if max(w, h) / min(w, h) > MAX_INPUT_RATIO:
         raise ImageRejected("图片长宽比超过 10:1，请换一张")
 
-    # 长边和总像素两条约束谁更紧就按谁缩，保证留在所选档位内
-    side, area = max_side(size), out_area(size)
+    # 长边和总像素两条约束谁更紧就按谁缩，保证留在这一档的输入上限内（480p 的输入上限就是 1K 的）
+    side, area = max_side(size), input_area(size)
     scale = min(1.0, side / max(w, h), math.sqrt(area / (w * h)))
     nw, nh = _floor_step(w * scale), _floor_step(h * scale)
     if min(nw, nh) < MIN_SIDE_AFTER_RESIZE:

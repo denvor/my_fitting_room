@@ -1,7 +1,11 @@
 // 试衣间前端：选两张图 → 一次请求 → 估算进度 + 真实秒数 → 结果与图库。
 
-// 进度条的估算基数：来源 × 档位。api-2k 那个是按像素比推的、没实测，其余三个都有实测点（见 README 耗时表）。
-const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-1k": 60000, "comfyui-2k": 540000 };
+// 进度条的估算基数：来源 × 档位。api-2k 那个是按像素比推的、没实测，其余都有实测点（见 README 耗时表）。
+// 本地这三个数是 2026-10-31 同机连测出来的：480p 26.0/26.1/26.2 秒、1K 95.1/95.4/96.2 秒、2K 543 秒。
+const ESTIMATE_MS = { "api-1k": 90000, "api-2k": 170000, "comfyui-480p": 26000, "comfyui-1k": 95000, "comfyui-2k": 540000 };
+const BANDS = ["480p", "1k", "2k"]; // 和后端 prefs.VALID_SIZES 同一套顺序
+const BAND_LABEL = { "480p": "480p", "1k": "1K", "2k": "2K" }; // 480p 大写会变成 480P，那是型号写法不是这里要的
+const LOCAL_WAIT = { "480p": "约 26 秒", "1k": "约 95 秒", "2k": "约 9 分钟" };
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
 let genSize = "1k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
 
@@ -22,7 +26,8 @@ const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的
 // 和后端 prepare_upload 的长边上限一致（表在 tryon/image_prep.py 的 SIDE_BY_SIZE）。
 // 2K 档要 2048：本地那条的输出跟着参考图走，传 1536 就出不了 2K。
 // 解码峰值从约 7MB 涨到约 22MB（2048 长边），仍然有界 —— 全尺寸解码才是手机上卡死的那个。
-const UPLOAD_SIDE = { "1k": 1536, "2k": 2048 };
+// 480p 和 1K 用同一个输入上限：实测输入 1.77M 和 0.31M 都是 26 秒，缩输入一分时间都不省，只丢条件。
+const UPLOAD_SIDE = { "480p": 1536, "1k": 1536, "2k": 2048 };
 const UPLOAD_QUALITY = 0.92; // 和服务端那次重编码对齐，少一次有损压缩
 const previewUrls = { person: "", garment: "" };
 const working = { person: false, garment: false }; // 还在处理的那一格
@@ -204,7 +209,7 @@ function usageLine(meta, elapsed) {
   if (meta.source === "comfyui") {
     // 本地这条没有接口回传的那套档位字段，说清是谁出的、哪一档、多大、多久就够
     const local = ["本地 ComfyUI"];
-    if (meta.band) local.push(meta.band.toUpperCase() + " 档");
+    if (meta.band) local.push(`${BAND_LABEL[meta.band] || meta.band} 档`); // 480p 不能大写，那是 480P
     if (u.output_width && u.output_height) local.push(`输出 ${u.output_width}×${u.output_height}`);
     local.push(`用时 ${elapsed} 秒`);
     return local;
@@ -251,10 +256,10 @@ function setBusy(busy) {
 }
 
 function confirmStart() {
-  const band = genSize.toUpperCase();
+  const band = BAND_LABEL[genSize];
   if (genSource === "comfyui") {
     return confirm(
-      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度。\n1K 快则 20 秒、冷显存约 145 秒；2K 实测约 9 分钟。\n\n取消不动图片。`
+      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度 · 实测${LOCAL_WAIT[genSize]}。\n\n取消不动图片。`
     );
   }
   const cost = quota
@@ -292,7 +297,7 @@ async function loadQuota() {
   try {
     const body = await (await fetch("api/quota")).json();
     genSource = body.source === "comfyui" ? "comfyui" : "api";
-    genSize = body.size === "2k" ? "2k" : "1k"; // 只认后端回的 2k，其余一律当默认档
+    genSize = BANDS.includes(body.size) ? body.size : "1k"; // 只认后端报的三档之一，其余一律当默认档
     // 后端的生成锁。这一条是给"连接被 nginx 掐断"那种情况兜底的：前端只知道请求失败了，
     // 服务端其实还在跑 —— 按钮得继续按住，过几秒再问一次，跑完顺手把图库刷出来（图本来就在库里）。
     const wasBusy = serverBusy;
@@ -304,10 +309,8 @@ async function loadQuota() {
     if (genSource === "comfyui") {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
-      el.textContent =
-        genSize === "2k"
-          ? "本机 ComfyUI · 2K 档 · 不花额度 · 实测约 9 分钟"
-          : "本机 ComfyUI · 1K 档 · 不花额度 · 快则 20 秒，冷启动或大图要两三分钟";
+      // 本地这条不查额度，也不假装知道 ComfyUI 连不连得上；秒数是同机实测的那三个点
+      el.textContent = `本机 ComfyUI · ${BAND_LABEL[genSize]} 档 · 不花额度 · 实测${LOCAL_WAIT[genSize]}`;
       return;
     }
     if (body.ok) {

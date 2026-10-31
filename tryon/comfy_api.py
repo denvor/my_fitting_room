@@ -28,9 +28,10 @@ HTTP_TIMEOUT = 30
 VIEW_TIMEOUT = 60
 POLL_INTERVAL = 1.0
 RESOLUTION_STEP = 32
-GENERATION_TIMEOUT = 300  # 1K 档实测最长 145 秒，留一倍余量；本地超时无成本，到点报错就行
+GENERATION_TIMEOUT = 300  # 1K 档实测：896×1152 是 95 秒，1152×1536 见过 180 / 205 / 224 秒 —— 300 秒只留了三成余量
+                          # （原来这句写的"最长 145 秒"是 10-27 那一次的值，10-30 的记录已经超了它）
 GENERATION_TIMEOUT_2K = 900  # 实测 539.62 秒（1K 同机 144.44 秒），留 1.7 倍余量 —— 这是上限不是预期
-TIMEOUT_BY_SIZE = {"1k": GENERATION_TIMEOUT, "2k": GENERATION_TIMEOUT_2K}
+TIMEOUT_BY_SIZE = {"480p": GENERATION_TIMEOUT, "1k": GENERATION_TIMEOUT, "2k": GENERATION_TIMEOUT_2K}
 CHECK_TIMEOUT = 10
 
 # 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
@@ -85,10 +86,13 @@ def comfy_resolution(width: int, height: int, size: str = "1k") -> int:
     """`resolution` 是像素预算不是宽高（§6.4）：0 = 按参考图自身尺寸，超一档就向下对齐 32 压回来。
 
     预算按档位取：1K 档 2,250,000 → 超了才压到 1472，否则原样出（基线行为）；
-    2K 档 4,157,440 → 恒 2016，参考图小也铺满，所以换档不再要求你先去上传更大的图。
+    2K 档 4,157,440 → 恒 2016，参考图小也铺满，所以换档不再要求你先去上传更大的图；
+    480p 档 307,200 → 恒 544。后两档都是"档位即目标"，只有 1K 维持"按参考图走、只被上限拦"。
+
+    实测（同机、8 步、输入多大都一样）：480p 26 秒、1K 95 秒、2K 543 秒 —— 耗时正比于这一档的面积。
     """
     ceiling = out_area(size)
-    if size == "2k":
+    if size != "1k":
         return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
     if width * height <= ceiling:
         return 0

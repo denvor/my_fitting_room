@@ -10,9 +10,9 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from tryon import comfy_api
 from tryon.auth import DEFAULT_SECRET_FILE, init_auth
-from tryon.image_prep import ImageRejected, api_size, prepare_upload
+from tryon.image_prep import ImageRejected, prepare_upload
 from tryon.joblock import LOCK_NAME, try_acquire, who_holds, release
-from tryon.prefs import DEFAULT_COMFY_URL, VALID_SIZES, VALID_SOURCES, Prefs, load_prefs, save_prefs
+from tryon.prefs import DEFAULT_COMFY_URL, VALID_SIZES, VALID_SOURCES, Prefs, clamp_size, load_prefs, save_prefs
 from tryon.prompt import TRYON_PROMPT
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
@@ -118,12 +118,15 @@ def create_app(
         if not _is_http_url(comfy_url):
             return _fail("settings", "ComfyUI 地址要写成 http://主机:端口，比如 http://127.0.0.1:8188", 400)
         if size not in VALID_SIZES:
-            return _fail("settings", f"尺寸只能是 1K 或 2K，收到的是 {size!r}", 400)
+            return _fail("settings", f"尺寸只能是 480p、1K 或 2K，收到的是 {size!r}", 400)
+        chosen = clamp_size(source, size)
+        # 回落要说出来：静默把用户刚点的那一项改掉，比报错更难查
+        note = "" if chosen == size else "480p 只有本机 ComfyUI 有这一档，接口那边最低就是 1K，已按 1K 存下"
         try:
-            save_prefs(prefs_path, Prefs(source, comfy_url, size))
+            save_prefs(prefs_path, Prefs(source, comfy_url, chosen))
         except OSError as e:  # 存不下来要说出来，别静默回到默认值
             return _fail("settings", f"设置存不下来：{e}", 500)
-        return jsonify({"ok": True, "source": source, "comfy_url": comfy_url, "size": size})
+        return jsonify({"ok": True, "source": source, "comfy_url": comfy_url, "size": chosen, "size_note": note})
 
     @app.post("/api/settings/check")
     def api_settings_check():
@@ -236,8 +239,9 @@ def create_app(
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_s": elapsed,
                 "prompt": TRYON_PROMPT,
-                # 本地那条路由 ComfyUI 自己按参考图比例算尺寸，记真实输出；API 记我们请求的那档
-                "size": f"{g.width}*{g.height}" if local else api_size(person.width, person.height, prefs.size),
+                # 两条来源都记真正回来的那张，不记"我们请求的那档"：2026-10-31 实测接口会无视
+                # 请求里更小的尺寸（要 496*616，回传 896×1152），记想要的会让 meta.json 说谎
+                "size": f"{g.width}*{g.height}",
                 "band": prefs.size,
                 "source": prefs.source,
                 "usage": g.usage,

@@ -14,6 +14,7 @@ from tryon.settings import Settings, load_settings
 
 ONE_K_AREA = 2_250_000
 TWO_K_AREA = 4_157_440  # 1792×2320：实测接口收得下、扣 108 credit 的那一档
+FOUR_80P_AREA = 307_200  # 480×640：2026-10-31 实测本地 26 秒那一档（同机 1K 是 95 秒）
 
 
 def dimensions(size_str: str) -> tuple[int, int]:
@@ -31,13 +32,32 @@ def jpeg(width: int, height: int) -> bytes:
 
 
 def test_band_table():
-    assert (out_area("1k"), out_area("2k")) == (ONE_K_AREA, TWO_K_AREA)
-    assert (max_side("1k"), max_side("2k")) == (1536, 2048)
+    assert (out_area("1k"), out_area("2k"), out_area("480p")) == (ONE_K_AREA, TWO_K_AREA, FOUR_80P_AREA)
+    assert (max_side("1k"), max_side("2k"), max_side("480p")) == (1536, 2048, 1536)
 
 
 def test_credits_per_band_are_measured_not_doubled():
     # 2K 不是 1K 的两倍价：实测 108，不是 116
     assert (credits_for("1k"), credits_for("2k")) == (CREDITS_PER_1K, CREDITS_PER_2K) == (58, 108)
+
+
+def test_480p_costs_the_same_as_1k_on_the_api():
+    # 实测 2026-10-31：请求 0.31M 的图，入账正好 +58.000，接口按面积分档、没有低于 1K 的那一档
+    assert credits_for("480p") == CREDITS_PER_1K
+
+
+# ---- 480p 这一档只管输出，输入不动 ----
+
+
+def test_prepare_upload_480p_does_not_shrink_the_input():
+    # 实测输入 1.77M / 0.79M / 0.31M 三种都是 26 秒，所以缩输入只会丢掉喂给模型的条件，不会省时间
+    raw = jpeg(3072, 4096)
+    assert (prepare_upload(raw, "480p").width, prepare_upload(raw, "480p").height) == (1152, 1536)
+
+
+def test_comfy_resolution_480p_targets_the_small_budget_whatever_the_input():
+    assert comfy_resolution(896, 1152, "480p") == 544 == comfy_resolution(2048, 1536, "480p")
+    assert 544 % 32 == 0 and 544 * 544 <= FOUR_80P_AREA
 
 
 # ---- API 那条：输出尺寸 ----
@@ -153,8 +173,33 @@ def test_missing_or_illegal_size_env_falls_back_to_default(tmp_path, raw, expect
     assert load_settings(p).size == expected
 
 
-def test_valid_sizes_are_the_two_bands():
-    assert VALID_SIZES == ("1k", "2k")
+def test_valid_sizes_are_the_three_bands_smallest_first():
+    assert VALID_SIZES == ("480p", "1k", "2k")
+
+
+def test_local_source_keeps_480p(tmp_path):
+    f = tmp_path / "settings.json"
+    f.write_text('{"source": "comfyui", "comfy_url": "http://x", "size": "480p"}', encoding="utf-8")
+    assert load_prefs(f, Prefs()).size == "480p"
+
+
+def test_api_source_never_runs_480p(tmp_path):
+    # 接口那边没有低于 1K 的档：存成 api + 480p 也得出 1K，不然页面写着低档、账上按 1K 扣
+    f = tmp_path / "settings.json"
+    f.write_text('{"source": "api", "comfy_url": "http://x", "size": "480p"}', encoding="utf-8")
+    assert load_prefs(f, Prefs()).size == "1k"
+
+
+def test_conflicting_env_defaults_get_clamped_too(tmp_path):
+    # .env 里 TRYON_SOURCE=api 配 TRYON_SIZE=480p 是自相矛盾的组合，默认值这条路径也得收敛到 1K
+    assert load_prefs(tmp_path / "没有这个文件.json", Prefs("api", "http://x", "480p")).size == "1k"
+
+
+def test_every_band_has_its_own_local_timeout():
+    # comfy_api.generate 按档位查超时上限，缺一项就是选到那一档时 KeyError
+    from tryon.comfy_api import TIMEOUT_BY_SIZE
+
+    assert set(TIMEOUT_BY_SIZE) >= set(VALID_SIZES)
 
 
 # ---- 档位真的传到了两条来源 ----
@@ -184,6 +229,8 @@ class Recording:
 
 SAVED_2K_API = '{"source": "api", "comfy_url": "http://x", "size": "2k"}'
 SAVED_2K_COMFY = '{"source": "comfyui", "comfy_url": "http://x", "size": "2k"}'
+SAVED_480P_COMFY = '{"source": "comfyui", "comfy_url": "http://x", "size": "480p"}'
+SAVED_480P_API = '{"source": "api", "comfy_url": "http://x", "size": "480p"}'
 
 
 def make(tmp_path, rec, prefs_text=None, **over):
@@ -236,6 +283,36 @@ def test_local_path_gets_the_selected_band(tmp_path):
     client = make(tmp_path, rec, prefs_text=SAVED_2K_COMFY).test_client()
     post_tryon(client)
     assert rec.comfy_size == ["2k"]
+
+
+def test_local_path_gets_the_480p_band(tmp_path):
+    rec = Recording()
+    client = make(tmp_path, rec, prefs_text=SAVED_480P_COMFY).test_client()
+    post_tryon(client)
+    assert rec.comfy_size == ["480p"]
+
+
+def test_api_path_falls_back_to_1k_when_the_saved_band_is_480p(tmp_path):
+    # 设置文件是死的、来源可能被别的入口改过：真发请求那一刻也得按 1K 走
+    rec = Recording()
+    client = make(tmp_path, rec, prefs_text=SAVED_480P_API).test_client()
+    post_tryon(client)
+    assert rec.api_settings[0].size == "1k"
+
+
+def test_saving_480p_on_the_api_source_falls_back_and_says_so(tmp_path):
+    rec = Recording()
+    client = make(tmp_path, rec, source="api").test_client()
+    r = client.post("/api/settings", json={"source": "api", "comfy_url": "http://x", "size": "480p"})
+    body = r.get_json()
+    assert r.status_code == 200 and body["size"] == "1k"
+    assert "480p" in body["size_note"], "回落要说明，不能静默改掉用户刚选的那一项"
+
+
+def test_quota_tells_the_page_which_band_it_is_running(tmp_path):
+    rec = Recording()
+    client = make(tmp_path, rec, prefs_text=SAVED_480P_COMFY).test_client()
+    assert client.get("/api/quota").get_json()["size"] == "480p"
 
 
 def test_quota_line_prices_the_selected_band(tmp_path):

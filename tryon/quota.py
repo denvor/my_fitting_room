@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 CREDITS_PER_1K = 58  # 实测：一次成功的 1K 生成扣 58 credit
 CREDITS_PER_2K = 108  # 实测：1792×2320 一次扣 108，不是 58 的两倍
-CREDITS_BY_SIZE = {"1k": CREDITS_PER_1K, "2k": CREDITS_PER_2K}
+# 480p 在 API 那条走不到（prefs.clamp_size 会收成 1K），这个数留着是记下实测结论：
+# 2026-10-31 请求 496*616，接口回传 896×1152、入账正好 +58.000 —— 它按面积分档，没有低于 1K 的那一档。
+CREDITS_BY_SIZE = {"480p": CREDITS_PER_1K, "1k": CREDITS_PER_1K, "2k": CREDITS_PER_2K}
 CLI_TIMEOUT = 20
 
 
