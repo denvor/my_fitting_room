@@ -9,18 +9,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VALID_SOURCES: tuple[str, str] = ("api", "comfyui")
-VALID_SIZES = ("480p", "1k", "2k")  # 顺序就是设置页里的顺序：小 → 大
-DEFAULT_SIZE = "1k"  # 默认档：便宜、快；480p 和 2K 都要人在设置页里自己切过去
-LOCAL_ONLY_SIZE = "480p"  # 接口那边没有低于 1K 的档（实测 0.31M 照样扣 58，还回一张输入尺寸的图）
+VALID_SIZES = ("480p", "720p", "1k", "2k")  # 顺序就是设置页里的顺序：小 → 大
+DEFAULT_SIZE = "1k"  # 默认档：便宜、快；低档和 2K 都要人在设置页里自己切过去
+# 低于 1K 的两档只有本机 ComfyUI 有：接口按面积分档，实测 0.31M 照样扣 58，还回一张输入尺寸的图
+LOCAL_ONLY_SIZES = ("480p", "720p")
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
 
 def clamp_size(source: str, size: str) -> str:
-    """480p 是本地 ComfyUI 专属：来源是 API 时一律按 1K 走。
+    """低档是本地 ComfyUI 专属：来源是 API 时一律按 1K 走。
 
     不这么收的话，页面写着"低档"、账上按 1K 扣 58、出的还是输入尺寸那张 —— 三个字段各说一套。
     """
-    return DEFAULT_SIZE if size == LOCAL_ONLY_SIZE and source == "api" else size
+    return DEFAULT_SIZE if size in LOCAL_ONLY_SIZES and source == "api" else size
 
 
 @dataclass(frozen=True)

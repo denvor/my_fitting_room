@@ -19,22 +19,24 @@
     <h2>生成来源</h2>
     <div class="radios">
       <label><input type="radio" name="source" value="api"> token plan API<span class="sub">1K 一次 58 credit · 实测 46–107 秒</span></label>
-      <label><input type="radio" name="source" value="comfyui"> 本机 ComfyUI<span class="sub">不花额度 · 实测 480p 26 秒、1K 95 秒、2K 9 分钟</span></label>
+      <label><input type="radio" name="source" value="comfyui"> 本机 ComfyUI<span class="sub">不花额度 · 实测 480p 26 秒、720p 70 秒、1K 95 秒、2K 9 分钟</span></label>
     </div>
   </section>
 
   <section class="setting">
     <h2>输出尺寸</h2>
     <div class="radios">
-      <label><input type="radio" name="size" value="480p"> 480p · 480×640 那点像素<span class="sub">只走本机 ComfyUI · 实测约 26 秒</span></label>
-      <label><input type="radio" name="size" value="1k"> 1K（默认）<span class="sub">API 一次 58 credit · 本地实测 95 秒</span></label>
+      <label><input type="radio" name="size" value="480p"> 480p · 480×640 那点像素<span class="sub">只走本机 ComfyUI · 实测约 26 秒 · 只是判断行不行</span></label>
+      <label><input type="radio" name="size" value="720p"> 720p · 768×1024 那点像素<span class="sub">只走本机 ComfyUI · 实测约 70 秒 · 织纹和缝线看得出来</span></label>
+      <label><input type="radio" name="size" value="1k"> 1K（默认）<span class="sub">API 一次 58 credit · 本地实测 95 秒起</span></label>
       <label><input type="radio" name="size" value="2k"> 2K · 更大更清楚<span class="sub">API 一次 108 credit · 本地约 9 分钟</span></label>
     </div>
-    <p class="hint">耗时几乎正比于这一档的总像素（同机本地实测：480p 26 秒、1K 95 秒、2K 9 分钟）。
-      480p 只有本机 ComfyUI 有 —— 接口按面积分档，最低就是 1K：实测请求 0.31M 照样扣 58，而且它不出小图，
+    <p class="hint">耗时几乎正比于这一档的总像素（同机本地实测：480p 26 秒、720p 70 秒、1K 95 秒、2K 9 分钟；
+      手机直出的照片像素多，1K 档实测能到 180–224 秒，低档把这一部分直接砍掉）。
+      480p 和 720p 只有本机 ComfyUI 有 —— 接口按面积分档，最低就是 1K：实测请求 0.31M 照样扣 58，而且它不出小图，
       回给你的是参考图尺寸那张。</p>
     <p class="hint">输入多大不影响耗时（1.77M 的输入也是 26 秒），所以只有选 2K 时浏览器才把照片压到长边 2048
-      再上传，其余两档都是 1536：那一档要的是更大的输出，就得喂更大的原图。</p>
+      再上传，其余三档都是 1536：那一档要的是更大的输出，就得喂更大的原图。</p>
   </section>
 
   <section class="setting">

@@ -31,7 +31,12 @@ RESOLUTION_STEP = 32
 GENERATION_TIMEOUT = 300  # 1K 档实测：896×1152 是 95 秒，1152×1536 见过 180 / 205 / 224 秒 —— 300 秒只留了三成余量
                           # （原来这句写的"最长 145 秒"是 10-27 那一次的值，10-30 的记录已经超了它）
 GENERATION_TIMEOUT_2K = 900  # 实测 539.62 秒（1K 同机 144.44 秒），留 1.7 倍余量 —— 这是上限不是预期
-TIMEOUT_BY_SIZE = {"480p": GENERATION_TIMEOUT, "1k": GENERATION_TIMEOUT, "2k": GENERATION_TIMEOUT_2K}
+TIMEOUT_BY_SIZE = {
+    "480p": GENERATION_TIMEOUT,
+    "720p": GENERATION_TIMEOUT,  # 实测 70.6 秒，和 1K 共用 300 秒上限
+    "1k": GENERATION_TIMEOUT,
+    "2k": GENERATION_TIMEOUT_2K,
+}
 CHECK_TIMEOUT = 10
 
 # 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
@@ -85,16 +90,15 @@ class ComfyResultMissing(Exception):
 def comfy_resolution(width: int, height: int, size: str = "1k") -> int:
     """`resolution` 是像素预算不是宽高（§6.4）：0 = 按参考图自身尺寸，超一档就向下对齐 32 压回来。
 
-    预算按档位取：1K 档 2,250,000 → 超了才压到 1472，否则原样出（基线行为）；
-    2K 档 4,157,440 → 恒 2016，参考图小也铺满，所以换档不再要求你先去上传更大的图；
-    480p 档 307,200 → 恒 544。后两档都是"档位即目标"，只有 1K 维持"按参考图走、只被上限拦"。
+    除了 2K，每一档都是**上限**：参考图在预算内就原样出（1K 的基线行为，480p / 720p 照同一套），
+    本来就比这一档小的图不去放大它 —— 放大花的时间和铺满一样，细节一点不多。
+    只有 2K 把档位当**目标**（恒 2016，参考图小也铺满），否则"选了 2K 还是出 1K"没人看得出来是为什么。
 
-    实测（同机、8 步、输入多大都一样）：480p 26 秒、1K 95 秒、2K 543 秒 —— 耗时正比于这一档的面积。
+    预算 = 档位面积上限开方后向下对齐 32：480p → 544、720p → 864、1K → 1472、2K → 2016。
+    实测（同机、8 步、输入多大都一样）：480p 26 秒、720p 70 秒、1K 95 秒、2K 543 秒 —— 耗时正比于这一档的面积。
     """
     ceiling = out_area(size)
-    if size != "1k":
-        return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
-    if width * height <= ceiling:
+    if size != "2k" and width * height <= ceiling:
         return 0
     return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
 

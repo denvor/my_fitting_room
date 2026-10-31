@@ -23,15 +23,20 @@ function setState(text) {
   $("save-state").textContent = text;
 }
 
-// 480p 是本地专属：接口按面积分档、最低就是 1K（实测请求 0.31M 照样扣 58，出的还是参考图尺寸）。
-// 这里按住不给选，后端 clamp_size 还会再收一次，两边说的是同一件事。
+// 低于 1K 的两档是本地专属：接口按面积分档、最低就是 1K（实测请求 0.31M 照样扣 58，出的还是参考图尺寸）。
+// 这里按住不给选，后端 clamp_size 还会再收一次（那份表在 tryon/prefs.py 的 LOCAL_ONLY_SIZES），两边说的是同一件事。
+const LOCAL_ONLY = ["480p", "720p"];
+
 function applySourceLock() {
-  const low = document.querySelector('input[name="size"][value="480p"]');
-  if (!low) return;
-  low.disabled = chosenSource() === "api";
-  if (low.disabled && low.checked) {
+  const api = chosenSource() === "api";
+  const chosen = chosenSize();
+  for (const value of LOCAL_ONLY) {
+    const input = document.querySelector(`input[name="size"][value="${value}"]`);
+    if (input) input.disabled = api;
+  }
+  if (api && LOCAL_ONLY.includes(chosen)) {
     document.querySelector('input[name="size"][value="1k"]').checked = true;
-    setState("480p 只有本机 ComfyUI 有这一档，已改回 1K");
+    setState(`${chosen} 只有本机 ComfyUI 有这一档，已改回 1K`);
   }
 }
 
