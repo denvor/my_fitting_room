@@ -26,7 +26,16 @@ from tryon.prefs import (
 from tryon.prompt import REF_FIELDS, REF_SLOTS, SLOT_LABELS, VALID_MODES, prompt_for
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
-from tryon.samples import SampleRejected, list_samples, sample_path, sample_thumb
+from tryon.samples import (
+    SampleRejected,
+    add_samples,
+    list_samples,
+    make_room,
+    move_path,
+    remove_path,
+    sample_path,
+    sample_thumb,
+)
 from tryon.records import (
     FILE_BASENAMES,
     RECORD_ID_RE,
@@ -210,6 +219,58 @@ def create_app(
             )
         except QuotaUnavailable as e:
             return jsonify({"ok": False, "source": "api", "message": str(e), "busy": busy})
+
+    @app.get("/samples-manage")
+    def samples_manage_page():
+        return send_from_directory(STATIC_DIR, "samples.html")
+
+    @app.post("/api/samples/add")
+    def api_samples_add():
+        """存进图库：分类是表单里写的（不存在就建），图片可以一次几张。"""
+        files = [(f.filename, f.read()) for f in request.files.getlist("image") if f and f.filename]
+        if not files:
+            return _fail("sample", "没有收到图片", 400)
+        try:
+            added = add_samples(samples_path, request.form.get("group", ""), request.form.get("sub", ""), files)
+        except SampleRejected as e:
+            return _fail("sample", str(e), 400)
+        except OSError as e:
+            return _fail("sample", f"存不下来：{e}", 500)
+        return jsonify({"ok": True, "added": added})
+
+    @app.post("/api/samples/mkdir")
+    def api_samples_mkdir():
+        body = request.get_json(silent=True) or {}
+        try:
+            make_room(samples_path, str(body.get("group", "")), str(body.get("sub", "")))
+        except SampleRejected as e:
+            return _fail("sample", str(e), 400)
+        except OSError as e:
+            return _fail("sample", f"建不出来：{e}", 500)
+        return jsonify({"ok": True})
+
+    @app.post("/api/samples/move")
+    def api_samples_move():
+        """一个操作管三件事：改大类名、改细分类名、把一张图挪到别的架子。"""
+        body = request.get_json(silent=True) or {}
+        try:
+            moved = move_path(samples_path, str(body.get("from", "")), str(body.get("to", "")))
+        except SampleRejected as e:
+            return _fail("sample", str(e), 400)
+        except OSError as e:
+            return _fail("sample", f"没改成：{e}", 500)
+        return jsonify({"ok": True, "to": moved})
+
+    @app.post("/api/samples/remove")
+    def api_samples_remove():
+        body = request.get_json(silent=True) or {}
+        try:
+            remove_path(samples_path, str(body.get("path", "")))
+        except SampleRejected as e:
+            return _fail("sample", str(e), 400)
+        except OSError as e:
+            return _fail("sample", f"没删掉：{e}", 500)
+        return jsonify({"ok": True})
 
     @app.get("/api/samples")
     def api_samples():

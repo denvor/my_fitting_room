@@ -209,6 +209,48 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .frame-lib:hover { color: var(--chalk); border-color: var(--chalk); }
 
+/* sample 图库管理页 */
+.lib-form { margin: 0 0 2.6rem; }
+.lib-form h2, .lib-group h2 { font: 600 1.15rem/1.3 var(--serif); letter-spacing: .03em; margin: 0 0 .8rem; }
+.lib-form form { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.lib-form input {
+  flex: 1 1 11rem; padding: .5rem .6rem; background: var(--surface);
+  border: 1px solid var(--line); color: var(--ink); font: .9rem/1.4 var(--mono);
+}
+.slash { font: .9rem/1 var(--mono); color: var(--ink-soft); }
+
+#state { min-height: 1.5em; margin: 0 0 1.1rem; }
+.hint.bad, #state.bad { color: var(--stitch); }
+
+.lib-group { margin: 0 0 2.4rem; padding-top: 1.3rem; border-top: 1px solid var(--line); }
+.lib-head { display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap; }
+.lib-head h2 { margin: 0; }
+.lib-tools { display: flex; gap: .4rem; flex-wrap: wrap; margin-left: auto; }
+.lib-tools button, .lib-pic-tools button {
+  padding: .3rem .6rem; background: var(--surface); color: var(--ink-soft); font: .78rem/1 var(--mono);
+}
+.lib-tools button:hover, .lib-pic-tools button:hover { color: var(--chalk); }
+
+.lib-sub-head { display: flex; align-items: baseline; gap: .7rem; flex-wrap: wrap; margin-top: 1.2rem; }
+.lib-sub-head h3 { margin: 0; font: 600 1rem/1.3 var(--sans); }
+.lib-count, .lib-note { font: .76rem/1 var(--mono); color: var(--ink-soft); }
+
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); gap: .8rem; margin-top: .7rem; }
+.lib-pic { margin: 0; min-width: 0; }
+.lib-pic img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border: 1px solid var(--line); }
+.lib-pic figcaption { font: .74rem/1.4 var(--mono); color: var(--ink-soft); overflow-wrap: anywhere; }
+.lib-pic-tools { display: flex; gap: .35rem; margin-top: .35rem; flex-wrap: wrap; }
+.lib-pic-tools select {
+  flex: 1 1 auto; min-width: 0; padding: .25rem; background: var(--surface);
+  border: 1px solid var(--line); color: var(--ink-soft); font: .74rem/1 var(--mono);
+}
+
+.lib-rename { display: flex; gap: .4rem; align-items: center; }
+.lib-rename input { padding: .3rem .5rem; background: var(--surface); border: 1px solid var(--chalk); color: var(--ink); font: .85rem/1 var(--mono); }
+
+.pk-foot { margin: 1rem 0 0; font: .78rem/1.6 var(--mono); color: var(--ink-soft); }
+.pk-foot a { color: var(--chalk); }
+
 /* sample 图库弹层：暗底和灯箱同一套，面板是纸面，不给圆角和阴影 */
 .picker {
   position: fixed; inset: 0; overflow: auto; z-index: 20; /* 取景框里那颗按钮是 z-index:2，不给层级它会盖在弹层上 */
@@ -290,6 +332,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .frames { grid-template-columns: 1fr; }
   .modes { gap: .9rem; }
   .pk-grid { grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); }
+  .lib-grid { grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); }
+  .lib-tools { margin-left: 0; }
   .lb-row { flex-wrap: wrap; }
   .lb-main { order: -1; }
   .lb-main img { max-height: 58vh; max-width: 88vw; }

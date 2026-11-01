@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sample 图库 · 管理</title>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>sample 图库</h1>
+  <p class="lede">试衣时「从图库选」挑的就是这里的东西。加图、删图、改分类名，都在这页做。</p>
+  <p class="facts" id="tally">读取中…</p>
+  <p class="jump"><a href="./">← 回试衣间</a> · <a href="settings">设置 · 换生成来源</a></p>
+</header>
+
+<main>
+  <p class="hint" id="state"></p>
+
+  <section class="lib-form">
+    <h2>建一个空架子</h2>
+    <form id="new-room">
+      <input id="nr-group" list="group-names" placeholder="大类，比如 男装" autocomplete="off">
+      <span class="slash">/</span>
+      <input id="nr-sub" placeholder="细分类（可留空），比如 上衣" autocomplete="off">
+      <button type="submit">建</button>
+    </form>
+    <p class="hint">留空细分类就是躺在大类下面的一节 —— 发型那两类是这样的。</p>
+  </section>
+
+  <div id="tree"></div>
+</main>
+
+<datalist id="group-names"></datalist>
+<script src="static/samples.js"></script>
+</body>
+</html>
