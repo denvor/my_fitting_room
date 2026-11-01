@@ -615,6 +615,16 @@ def test_settings_page_is_served_with_relative_asset_refs(make):
     assert '"/static/' not in page and '"/api/' not in page and '"/settings' not in page
 
 
+def test_settings_save_control_and_back_link_share_the_two_edges(make):
+    """保存不能只躺在文末：这一页的坏法是"改完往上走，点返回，白改"（2026-11-01 真踩到）。
+    所以来源档位改成一改就存，而顶栏（返回 + 存没存）和贴在屏幕下沿的保存条得都在。"""
+    page = make()[0].get("/settings").get_data(as_text=True)
+    assert 'class="topbar"' in page and 'href="."' in page
+    assert page.index('class="topbar"') < page.index("<header>")
+    bar = page.index('class="savebar"')
+    assert 'id="save"' in page[bar:] and 'id="save-state"' in page[bar:] and 'id="sb-now"' in page[bar:]
+
+
 # --- 终审修复：.env 的默认值要真的接上（README 承诺过）---
 
 

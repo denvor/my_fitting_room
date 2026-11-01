@@ -9,9 +9,15 @@
 </head>
 <body>
 
+<!-- 顶栏：返回和"存没存"摆在同一行 —— 人走的时候眼睛看的就是这条 -->
+<div class="topbar">
+  <a class="tb-back" href=".">← 试衣间</a>
+  <span class="tb-state" id="top-state" aria-hidden="true"></span>
+</div>
+
 <header>
   <h1>设置</h1>
-  <p class="lede"><a href=".">← 回试衣间</a></p>
+  <p class="lede">来源和档位<strong>一改就存</strong>，不用找保存；只有 ComfyUI 地址要按下边那条上的「保存地址」。</p>
 </header>
 
 <main>
@@ -42,16 +48,20 @@
   <section class="setting">
     <h2>ComfyUI 地址</h2>
     <input id="comfy-url" class="url" type="text" spellcheck="false" autocomplete="off" aria-label="ComfyUI 地址">
-    <p class="hint">选了 API 时这一项用不上，但地址仍然要写对格式。</p>
+    <p class="hint">选了 API 时这一项用不上，但格式仍然要写对。地址留着手动存，是因为它得连着下面的自检一起看：
+      一边敲一边存，会把没敲完的半截写进盘里。</p>
     <button id="check">测一下能不能连上</button>
     <ul class="problems" id="problems" aria-live="polite" hidden></ul>
   </section>
 
-  <div class="actions">
-    <button id="save" class="primary">保存</button>
-    <span class="save-state" id="save-state" role="status" aria-live="polite"></span>
-  </div>
 </main>
+
+<!-- 常驻的保存条：贴在屏幕下沿，滚到哪儿都在。左边是这一次生效的设置，右边那颗只管地址 -->
+<div class="savebar">
+  <span class="sb-now" id="sb-now">读取中…</span>
+  <span class="sb-state" id="save-state" role="status" aria-live="polite"></span>
+  <button id="save" class="primary">保存地址</button>
+</div>
 
 <script src="static/settings.js"></script>
 </body>

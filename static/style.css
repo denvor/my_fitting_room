@@ -27,6 +27,10 @@ body {
 
 main, header { max-width: 54rem; margin: 0 auto; }
 
+/* 有贴底保存条的那页：body 底下那段 5rem 空白收回来，不然条子内缩一截、下面留一条纸 */
+body:has(.savebar) { padding-bottom: 0; }
+
+
 h1 {
   margin: 0;
   font: 600 clamp(2.1rem, 6vw, 3rem)/1.15 var(--serif);
@@ -58,7 +62,41 @@ input.url {
   max-width: 24rem;
 }
 .problems { margin: .9rem 0 0; padding-left: 1.1rem; font: .85rem/1.7 var(--mono); color: var(--stitch); }
-.save-state { align-self: center; font: .85rem/1 var(--mono); color: var(--ink-soft); }
+
+/* 设置页的两条边：顶栏（返回 + 存没存）和贴在屏幕下沿的保存条。
+   原来保存这颗在最底下，返回在标题上头 —— 点完设置往上走的人根本看不见没保存这件事。 */
+/* 底色出血到屏幕两边，字却要跟 54rem 那一栏对齐（百分比内边距按 body 的内容宽算，所以补回那 1.5rem） */
+.topbar, .savebar { padding-inline: max(1.5rem, calc((100% - 54rem) / 2 + 1.5rem)); }
+
+.topbar {
+  position: sticky; top: 0; z-index: 21; /* 压住弹层和灯箱（都是 20）：设置页不该被浮层盖住返回 */
+  display: flex; align-items: center; gap: .8rem;
+  margin: -2.5rem -1.5rem 2rem; padding-block: .75rem;
+  background: var(--paper); border-bottom: 1px solid var(--line);
+}
+
+.tb-back {
+  font: 500 .95rem/1 var(--sans); color: var(--chalk); text-decoration: none;
+  border-bottom: 1px dashed currentColor; padding-bottom: .15rem;
+}
+.tb-back:hover { color: var(--ink); }
+.tb-back:focus-visible { outline: 2px solid var(--chalk); outline-offset: 3px; }
+.tb-state { margin-left: auto; font: .78rem/1 var(--mono); color: var(--ink-soft); }
+.tb-state.pending, .tb-state.fold { color: var(--chalk); border-bottom: 1px dashed currentColor; }
+.tb-state.bad { color: var(--stitch); }
+
+.savebar {
+  position: sticky; bottom: 0; z-index: 15;
+  display: flex; align-items: center; gap: .5rem 1.1rem; flex-wrap: wrap;
+  margin: 3rem -1.5rem 0; padding-block: .85rem calc(.85rem + env(safe-area-inset-bottom));
+  background: var(--paper); border-top: 1px solid var(--line);
+  box-shadow: 0 -14px 14px -14px rgba(30, 37, 34, .28); /* 内容从条子底下滚过去时要读得清 */
+}
+
+/* 这一次生效的是什么：等宽、少字，省得人要往上翻着核对 */
+.sb-now { font: .85rem/1.4 var(--mono); color: var(--ink); }
+.sb-state { flex: 1 1 8rem; font: .8rem/1.4 var(--mono); color: var(--ink-soft); }
+.savebar #save { margin-left: auto; padding: .6rem 1rem; font: 500 .88rem/1 var(--sans); }
 
 .frame {
   position: relative;
@@ -345,6 +383,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .lb-main { order: -1; }
   .lb-main img { max-height: 58vh; max-width: 88vw; }
   .lb-ref img { max-height: 20vh; max-width: 38vw; }
+  /* 两条边的负外边距要跟窄屏的 body 内边距对上，不然出不了血、边上留一条缝 */
+  .topbar { margin: -1.5rem -1rem 1.5rem; padding: .7rem 1rem; }
+  .savebar { margin: 2rem -1rem 0; padding: .8rem 1rem calc(.8rem + env(safe-area-inset-bottom)); }
+  .savebar #save { flex: 1 0 auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
