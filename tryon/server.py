@@ -323,7 +323,7 @@ def create_app(
             return _fail(
                 "mode",
                 f"{mode} 这个分类只收一张参考图（{SLOT_LABELS[mode][0]}），多出来的一张不会偷偷丢掉 —— "
-                "想一次穿上衣和裤子请切到「上衣+裤子」。",
+                "想一次穿上衣和裤子/裙子请切到「上衣加裤子/裙子」。",
                 400,
             )
         if not try_acquire(lock_path, prefs.source):

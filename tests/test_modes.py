@@ -1,5 +1,7 @@
 """三个分类：单参考图、双参考图（上衣+裤子）、换发型 —— 槽数和指令都在这儿定，前后端共用一份。"""
 
+from pathlib import Path
+
 import pytest
 
 from tryon.prompt import (
@@ -47,6 +49,7 @@ def test_every_prompt_names_the_slots_it_has(mode):
 
 def test_outfit_prompt_puts_both_pieces_on_and_keeps_the_person():
     assert "上衣" in OUTFIT_PROMPT and "裤子" in OUTFIT_PROMPT
+    assert "裙子" in OUTFIT_PROMPT  # 女装那张参考图多半是裙子，指令只说裤子的话模型会自己编条裤子出来
     assert "脸部五官" in OUTFIT_PROMPT and "背景不变" in OUTFIT_PROMPT
     assert "衣架" in OUTFIT_PROMPT  # 平铺/挂拍图里那些东西要明说忽略
 
@@ -59,9 +62,17 @@ def test_hair_prompt_changes_only_the_hair():
         assert keep in HAIR_PROMPT
 
 
+def test_hidden_frame_is_really_hidden():
+    """藏格子靠的是 `frame.hidden = true`，而 `.frame` 自己写了 `display: flex`：
+    作者样式盖过浏览器的 `[hidden] { display: none }`，格子就照样在那儿（2026-11-01 用户实测到）。
+    弹层和灯箱当初也是同一件事，各补了一条 —— 凡是有 display 的类都要配一句。"""
+    css = (Path(__file__).resolve().parents[1] / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".frame[hidden]" in css
+
+
 def test_slot_labels_are_what_the_page_shows():
     assert SLOT_LABELS["single"] == ("衣服照片",)
-    assert SLOT_LABELS["outfit"] == ("上衣照片", "裤子照片")
+    assert SLOT_LABELS["outfit"] == ("上衣照片", "裤子/裙子照片")
     assert SLOT_LABELS["hair"] == ("发型参考",)
 
 

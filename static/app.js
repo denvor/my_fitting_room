@@ -22,12 +22,12 @@ let genSize = "1k"; // 同上，档位决定浏览器压到多大、以及一次
 const PAGE_SIZE = 5; // 图库每页几条
 
 // 分类：槽位字段和名字与 tryon/prompt.py 的 REF_SLOTS / SLOT_LABELS 是同一套（这个项目里前端一直这样镜像后端表）。
-// 名字必须一字不差 —— 后端报"没有收到裤子照片图片"，页面上写的却是别的字，人就对不上号。
-const MODES = { single: "一件衣服", outfit: "上衣加裤子", hair: "换个发型" };
+// 名字必须一字不差 —— 后端报"没有收到裤子/裙子照片图片"，页面上写的却是别的字，人就对不上号。
+const MODES = { single: "一件衣服", outfit: "上衣加裤子/裙子", hair: "换个发型" };
 const MODE_SLOTS = { single: ["garment"], outfit: ["garment", "garment2"], hair: ["garment"] };
 const SLOT_TEXT = {
   single: [["衣服照片", "只放这一件，拍清款式和细节"]],
-  outfit: [["上衣照片", "上衣单独一张，拍清领口和门襟"], ["裤子照片", "平铺或挂拍都行，整条拍全"]],
+  outfit: [["上衣照片", "上衣单独一张，拍清领口和门襟"], ["裤子/裙子照片", "平铺或挂拍都行，从头到尾拍全"]],
   hair: [["发型参考", "要看清长度、层次和分缝的那张"]],
 };
 const ALL_SLOTS = ["garment", "garment2"];
@@ -499,7 +499,7 @@ function renderPicker() {
   pkSub = Math.min(pkSub, Math.max(0, subs.length - 1));
 
   $("pk-groups").replaceChildren(
-    ...groups.map((g, i) => tab(g.group, i === pkGroup, () => {
+    ...groups.map((g, i) => tab(g.label || g.group, i === pkGroup, () => {
       pkGroup = i;
       pkSub = 0;
       renderPicker();
@@ -507,7 +507,7 @@ function renderPicker() {
   );
   // 一个大类只有一节时（发型那些没细分的），再来一排 tab 是废话
   const single = subs.length === 1 && subs[0].name === groups[pkGroup].group;
-  const subTabs = single ? [] : subs.map((s, i) => tab(s.name, i === pkSub, () => {
+  const subTabs = single ? [] : subs.map((s, i) => tab(s.label || s.name, i === pkSub, () => {
     pkSub = i;
     renderPicker();
   }));
@@ -545,7 +545,7 @@ function cell(item) {
 function note() {
   if (!tree) return "图库读不到：连不上本机服务，或者还没登录。";
   if (!tree.length)
-    return "图库还是空的。把图片放进 data/samples/男装/上衣/ 这样的目录（大类/细分类/图.jpg），回到这里重开一次就有。";
+    return "图库还是空的。点下面的「管理图库」加图，或者把图片放进 data/samples/menswear/top/ 这样的目录（大类/细分类/图.jpg，名字用英文），回到这里重开一次就有。";
   return `共 ${tree.reduce((n, g) => n + g.subs.reduce((m, s) => m + s.items.length, 0), 0)} 张 · 挑中的会填进「${
     pkSlot === "person" ? "你的照片" : slotLabel(pkSlot)
   }」那一格。`;
@@ -636,7 +636,7 @@ async function loadGallery(gotoFirst) {
   renderGallery();
 }
 
-// 记录里那两张参考图按分类叫什么：单件是衣服，套装是上衣和裤子，发型那次是发型参考
+// 记录里那两张参考图按分类叫什么：单件是衣服，套装是上衣和下装，发型那次是发型参考
 function slotCap(m, index) {
   const table = SLOT_TEXT[m] || SLOT_TEXT.single; // 老记录里没有 mode，按单件读
   return (table[index] || ["参考图"])[0];

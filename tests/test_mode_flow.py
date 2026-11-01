@@ -96,7 +96,7 @@ def test_outfit_without_pants_names_the_empty_slot_and_never_generates(make):
     client, _root, spy = make()
     r = post(client, mode="outfit")
     assert r.status_code == 400 and spy.calls == []
-    assert "裤子照片" in r.get_json()["message"]  # 说的是哪个槽空着，不是"参数错误"
+    assert "裤子/裙子照片" in r.get_json()["message"]  # 说的是哪个槽空着，不是"参数错误"
 
 
 def test_hair_mode_sends_the_hair_prompt(make):

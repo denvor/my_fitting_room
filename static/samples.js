@@ -65,7 +65,8 @@ function groupBlock(group) {
   const loose = group.subs.find((s) => s.name === group.group); // 没有细分类时那一节就用大类自己的名字
   const shelves = group.subs.filter((s) => s !== loose);
   const total = group.subs.reduce((n, s) => n + s.items.length, 0); // 整类的张数：写"躺在大类下面那节有几张"会被读成整类
-  head.append(el("h2", null, group.group), el("span", "lib-count", total ? `${total} 张` : "还没有图"));
+  // 标题给人看中文（表里没这个名字就显示英文名本身），盘上那个英文名小字跟着 —— 建类改名要敲的是它
+  head.append(el("h2", null, group.label || group.group), slug(group.group), el("span", "lib-count", total ? `${total} 张` : "还没有图"));
   // 类标题那一行的「加图」存的就是大类自己那一节，所以只有这一节时不再重复一个同名的小标题
   head.append(groupTools(group, uploader(group.group, "")));
   block.append(head);
@@ -93,7 +94,7 @@ function subBlock(group, sub) {
   const shelf = shelfOf(group, sub);
   const wrap = el("div", "lib-sub");
   const head = el("div", "lib-sub-head");
-  head.append(el("h3", null, sub.name), el("span", "lib-count", `${sub.items.length} 张`));
+  head.append(el("h3", null, sub.label || sub.name), slug(sub.name), el("span", "lib-count", `${sub.items.length} 张`));
   const tools = el("div", "lib-tools");
   tools.append(
     btn("改名", () => startRename(shelf, head, (to) => move(shelf, to))),
@@ -127,6 +128,10 @@ function picture(item, shelf) {
   return fig;
 }
 
+function slug(name) {
+  return el("span", "lib-slug", name);
+}
+
 function btn(label, click, kind) {
   const b = el("button", kind ? `lib-${kind}` : null, label);
   b.type = "button";
@@ -148,7 +153,7 @@ function groupTools(group, upload) {
 function startRename(current, where, done, isGroup) {
   const input = el("input");
   input.value = isGroup ? current : current.split("/").pop();
-  input.placeholder = "新名字";
+  input.placeholder = "新名字，英文（比如 menswear）";
   const row = el("div", "lib-rename");
   row.append(input, btn("好", () => commit()), btn("算了", () => revert()));
   where.replaceChildren(row);

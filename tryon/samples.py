@@ -1,11 +1,15 @@
 """sample 图库：`data/samples/<大类>/<细分类>/<图>.jpg`，目录结构本身就是图库。
 
+名字一律英文（`menswear/top/denim-shirt.jpg`）：中文目录名在传文件、拼 URL、换终端时会出事，
+界面上的中文由 `LABELS` 这张表给。
+
 没有清单文件要维护 —— 加一张图就是往里放一个文件，页面下次刷新就有它。细分类可以不要，
 发型那两类就是直接躺在大类下面的。缩略图缓存在同目录的 `.thumbs/` 里，那是生成物，
 所以扫目录时凡是 `.` 开头的都一律不看一眼。
 """
 
 import os
+import re
 import shutil
 import tempfile
 from io import BytesIO
@@ -16,7 +20,22 @@ from PIL import Image, ImageOps
 from tryon.image_prep import MAX_UPLOAD_BYTES
 
 # 顺序就是图库弹层里 tab 的顺序；这四类之外的目录跟在后面按名字排（大概是临时加的）
-GROUP_ORDER = ("男装", "女装", "男士发型", "女士发型")
+# 盘上的名字一律用英文：目录名要经得起重命名、传文件、拼 URL，换台机器终端里也不该出乱码。
+GROUP_ORDER = ("menswear", "womenswear", "hair-men", "hair-women")
+# 界面给人看的是中文，所以英文名在这儿过一道；表里没有的原样显示（临时建的类，编个假中文更糟）。
+LABELS = {
+    "menswear": "男装",
+    "womenswear": "女装",
+    "hair-men": "男士发型",
+    "hair-women": "女士发型",
+    "top": "上衣",
+    "bottom": "裤子/裙子",
+    "dress": "连衣裙",
+}
+
+
+def label_for(name: str) -> str:
+    return LABELS.get(name, name)
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 THUMB_DIR = ".thumbs"
 THUMB_LONG_SIDE = 240  # 网格里的格子就这么大，没必要把人家的原图解码一遍
@@ -67,15 +86,15 @@ def _sections(d: Path, group: str) -> list[dict]:
     sections = []
     loose = _images_in(d)
     if loose:
-        sections.append({"name": group, "items": [_item(d, group, p) for p in loose]})
+        sections.append({"name": group, "label": label_for(group), "items": [_item(d, group, p) for p in loose]})
     for sub in sorted((p for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")), key=lambda p: p.name):
         # 没图的细分类也报出来（items 是空表）：刚建好的架子在管理页要看得见，不然人会再建一次
-        sections.append({"name": sub.name, "items": [_item(d, group, p) for p in _images_in(sub)]})
+        sections.append({"name": sub.name, "label": label_for(sub.name), "items": [_item(d, group, p) for p in _images_in(sub)]})
     return sections
 
 
 def _item(group_dir: Path, group: str, file: Path) -> dict:
-    """相对路径是从大类那层算起的，所以有没有细分类都是同一种写法：男装/上衣/衬衫A.jpg。"""
+    """相对路径是从大类那层算起的，所以有没有细分类都是同一种写法：menswear/top/denim-shirt.jpg。"""
     full = f"{group}/{file.relative_to(group_dir).as_posix()}"
     return {"name": file.stem, "path": full, "url": f"samples/{full}", "thumb": f"samples/thumb/{full}"}
 
@@ -90,7 +109,7 @@ def list_samples(root: Path | str) -> list[dict]:
     groups.sort(key=lambda d: (GROUP_ORDER.index(d.name) if d.name in GROUP_ORDER else len(GROUP_ORDER), d.name))
     out = []
     for d in groups:
-        out.append({"group": d.name, "subs": _sections(d, d.name)})
+        out.append({"group": d.name, "label": label_for(d.name), "subs": _sections(d, d.name)})
     return out
 
 
@@ -126,6 +145,8 @@ def _write_private(path: Path, blob: bytes, stop: Path) -> None:
 
 MAX_NAME_CHARS = 60
 _FORBIDDEN_CHARS = ':*?"<>|'
+# 盘上的名字只认这几个字符：英文字母、数字、点（文件后缀）、短横线、下划线。中文一律拒（界面上的中文有表）
+_ASCII_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def _clean_name(raw: str, what: str, basename: bool = False) -> str:
@@ -144,6 +165,11 @@ def _clean_name(raw: str, what: str, basename: bool = False) -> str:
     text = "".join(ch for ch in text if ch not in _FORBIDDEN_CHARS and ch.isprintable()).strip(" .")
     if not text:
         raise SampleRejected(f"{what}的名字是空的")
+    if not _ASCII_NAME.fullmatch(text):
+        raise SampleRejected(
+            f"{what}的名字要用英文字母、数字、点、短横线或下划线（比如 menswear/top/denim-shirt），"
+            f"界面上的中文这边会替你翻：{raw!r}"
+        )
     if len(text) > MAX_NAME_CHARS:
         raise SampleRejected(f"{what}的名字太长了（{MAX_NAME_CHARS} 个字以内）：{text[:20]}…")
     return text
