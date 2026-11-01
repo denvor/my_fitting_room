@@ -341,6 +341,27 @@ async function loadQuota() {
   }
 }
 
+// 进页面那一次的来源体检：存的若是本机 ComfyUI 而它没在线，后端当场把设置切成 token plan 1K，
+// 这里负责把这件事说出来。为什么是进页面时切、而不是点"开始试穿"时切：换来源就是换模型换价钱，
+// 藏在一次点击底下是挖质量线的坑；弹窗里那句"一次 58 credit"和待会儿确认框、页眉用的是同一个数。
+async function checkComfyOnLoad() {
+  let body;
+  try {
+    const r = await fetch("api/comfy/fallback", { method: "POST" });
+    if (!r.ok) return; // 后端答不了：页面自己也是靠这条才刷得出状态，不在这儿补一句错
+    body = await r.json();
+  } catch {
+    return; // 网络断了同理，别拿一句弹窗挡住人
+  }
+  if (!body.switched) return;
+  await loadQuota(); // 页眉那行、剩余次数、确认框的 credit 数全部跟着变成真的 API 状态
+  alert(
+    `${body.reason}，已自动切到 token plan。\n\n` +
+      `档位 ${BAND_LABEL[body.size]} · 一次 ${body.credits} credit。\n\n` +
+      `ComfyUI 起来之后去「设置」把来源切回「本机 ComfyUI」，地址还留着，档位也得重新点一次。`
+  );
+}
+
 function recordCell(rec) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -437,9 +458,13 @@ $("lightbox").addEventListener("click", (e) => { if (e.target === $("lightbox"))
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
 loadGallery();
 loadQuota();
+checkComfyOnLoad(); // 本机不在线就在这儿说，别等点下去才报错
 // 手机从设置页按物理返回键回来时，页面是从 bfcache 直接恢复的，不重跑初始化。
 // 不补这一句的话，来源换了而确认框还写着"不花额度"——那点下去就是 58 credit。
-window.addEventListener("pageshow", () => {
+window.addEventListener("pageshow", (e) => {
   loadQuota();
   loadGallery();
+  // 只在真是从 bfcache 恢复时（persisted）才再问一次健康：首屏上面已经问过了，Chrome 首次加载
+  // 也会派一次 pageshow —— 发两遍就是两个请求同时写设置文件，2026-11-01 实测那样会 500、弹窗丢。
+  if (e.persisted) checkComfyOnLoad(); // 在设置页把来源点回本机、ComfyUI 却没起：回来的这一下同样要拦
 });

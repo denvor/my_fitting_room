@@ -12,7 +12,16 @@ from tryon import comfy_api
 from tryon.auth import DEFAULT_SECRET_FILE, init_auth
 from tryon.image_prep import ImageRejected, prepare_upload
 from tryon.joblock import LOCK_NAME, try_acquire, who_holds, release
-from tryon.prefs import DEFAULT_COMFY_URL, VALID_SIZES, VALID_SOURCES, Prefs, clamp_size, load_prefs, save_prefs
+from tryon.prefs import (
+    DEFAULT_COMFY_URL,
+    DEFAULT_SIZE,
+    VALID_SIZES,
+    VALID_SOURCES,
+    Prefs,
+    clamp_size,
+    load_prefs,
+    save_prefs,
+)
 from tryon.prompt import TRYON_PROMPT
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
@@ -65,6 +74,7 @@ def create_app(
     quota_fn=read_quota,
     comfy_generate_fn=comfy_api.generate,
     comfy_check_fn=comfy_api.check,
+    comfy_health_fn=comfy_api.healthy,
     prefs_file: Path | str | None = None,
     secret_file: Path | str | None = None,
 ) -> Flask:
@@ -135,6 +145,37 @@ def create_app(
         url = body.get("comfy_url") or load_prefs(prefs_path, prefs_defaults).comfy_url
         result = comfy_check_fn(url)
         return jsonify({"ok": result.ok, "problems": list(result.problems)})
+
+    @app.post("/api/comfy/fallback")
+    def api_comfy_fallback():
+        """首页加载时问一次：本机 ComfyUI 没在线就当众切到 token plan 1K —— 不是等点下去才偷偷换。
+
+        三件刻意的事：来源本来就是 api 的人不去探（多一次请求、多一句弹窗）；有人拿着生成锁时不判死
+        （正忙着出图的 ComfyUI 恰恰最像"没应答"，那一切就是替人花 58）；档位一律收成 1K —— 自动切换
+        不该替人花 2K 那 108，也不该留着只有本地才有的低档。要更大档自己去设置页点。
+        """
+
+        def answer(source, size, switched, reason):
+            return jsonify(
+                {
+                    "ok": True,
+                    "switched": switched,
+                    "source": source,
+                    "size": size,
+                    "credits": credits_for(size),
+                    "reason": reason,
+                }
+            )
+
+        prefs = load_prefs(prefs_path, prefs_defaults)
+        if prefs.source != "comfyui":
+            return answer(prefs.source, prefs.size, False, "")
+        if _busy(lock_path):
+            return answer(prefs.source, prefs.size, False, "上一次还在跑，这次没去探 ComfyUI")
+        if comfy_health_fn(prefs.comfy_url):
+            return answer(prefs.source, prefs.size, False, "")
+        save_prefs(prefs_path, Prefs("api", prefs.comfy_url, DEFAULT_SIZE))  # 地址原样留着，人点回来就不用重填
+        return answer("api", DEFAULT_SIZE, True, f"连不上 ComfyUI（{prefs.comfy_url}）")
 
     @app.get("/api/quota")
     def api_quota():

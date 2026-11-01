@@ -38,6 +38,8 @@ TIMEOUT_BY_SIZE = {
     "2k": GENERATION_TIMEOUT_2K,
 }
 CHECK_TIMEOUT = 10
+# 首页加载要等它，所以只打一个接口、几秒就下结论：`check()` 那套是 4 个请求 × 10 秒，放这儿能把首屏拖死
+HEALTH_TIMEOUT = 3
 
 # 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
 # 而"端口通但一跑就错"比"连不上"难查得多
@@ -236,6 +238,19 @@ def _enum_options(info: dict, cls: str, widget: str) -> list | None:
     """从 /object_info/<cls> 里取某个 COMBO 输入的可选值列表。"""
     spec = ((info.get(cls) or {}).get("input", {}).get("required", {}) or {}).get(widget)
     return spec[0] if isinstance(spec, list) and spec and isinstance(spec[0], list) else None
+
+
+def healthy(comfy_url: str) -> bool:
+    """ComfyUI 在不在 —— 首页加载问一次，不在就当场退到 token plan（README「两条生成来源」）。
+
+    只打 `/system_stats` 一个接口、只等 `HEALTH_TIMEOUT` 秒，所以它只回答"通不通"，
+    不回答"能不能出图"：权重没下、缺节点这些都算在线，那种错该在生成时原样报出来（那是 `check()` 的活）。
+    """
+    try:
+        _get_json(comfy_url.rstrip("/") + "/system_stats", HEALTH_TIMEOUT)
+        return True
+    except (ComfyUnavailable, ComfyRejected):
+        return False
 
 
 def check(comfy_url: str) -> CheckResult:
