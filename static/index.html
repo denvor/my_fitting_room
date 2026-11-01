@@ -11,28 +11,51 @@
 
 <header>
   <h1>试衣间</h1>
-  <p class="lede">两张图，几十秒到两分钟，看这件衣服上身。</p>
+  <p class="lede">一张人像加一两张参考图，几十秒到两分钟，看上身效果。</p>
   <p class="facts" id="quota">额度查询中…</p>
   <p class="jump"><a href="settings">设置 · 换生成来源</a></p>
 </header>
 
 <main>
-  <section class="frames">
-    <label class="frame" id="frame-person">
+  <div class="modes" id="modes" role="group" aria-label="试穿分类">
+    <button type="button" class="mode" data-mode="single" aria-pressed="true">
+      一件衣服<span class="mode-n">1 张参考图</span>
+    </button>
+    <button type="button" class="mode" data-mode="outfit" aria-pressed="false">
+      上衣加裤子<span class="mode-n">2 张参考图</span>
+    </button>
+    <button type="button" class="mode" data-mode="hair" aria-pressed="false">
+      换个发型<span class="mode-n">1 张参考图</span>
+    </button>
+  </div>
+
+  <section class="frames" id="frames">
+    <div class="frame" id="frame-person">
       <input type="file" id="person" accept="image/*">
       <img id="person-preview" alt="" hidden>
       <span class="frame-pick">点这里选图</span>
       <span class="frame-name">你的照片</span>
       <span class="frame-hint">正面、单人、光线均匀</span>
-    </label>
+      <button type="button" class="frame-lib" data-slot="person">从图库选</button>
+    </div>
 
-    <label class="frame" id="frame-garment">
+    <div class="frame" id="frame-garment">
       <input type="file" id="garment" accept="image/*">
       <img id="garment-preview" alt="" hidden>
       <span class="frame-pick">点这里选图</span>
       <span class="frame-name">衣服照片</span>
       <span class="frame-hint">只放这一件，拍清款式和细节</span>
-    </label>
+      <button type="button" class="frame-lib" data-slot="garment">从图库选</button>
+    </div>
+
+    <div class="frame" id="frame-garment2" hidden>
+      <input type="file" id="garment2" accept="image/*">
+      <img id="garment2-preview" alt="" hidden>
+      <span class="frame-pick">点这里选图</span>
+      <span class="frame-name">裤子照片</span>
+      <span class="frame-hint">平铺或挂拍都行，整条拍全</span>
+      <button type="button" class="frame-lib" data-slot="garment2">从图库选</button>
+    </div>
   </section>
 
   <p class="hint" id="need-both">两张都选好才能开始。</p>
@@ -68,7 +91,11 @@
     </figure>
     <figure class="lb-ref">
       <img id="lb-garment" alt="衣服照片">
-      <figcaption>衣服</figcaption>
+      <figcaption id="lb-garment-cap">衣服</figcaption>
+    </figure>
+    <figure class="lb-ref" id="lb-ref2" hidden>
+      <img id="lb-garment2" alt="第二张参考图">
+      <figcaption id="lb-garment2-cap">裤子</figcaption>
     </figure>
     <figure class="lb-main">
       <img id="lb-img" alt="试穿结果大图">
@@ -79,6 +106,19 @@
     <a id="lb-download" download>下载</a>
     <button id="lb-delete">删除这条</button>
     <button id="lb-close">关闭</button>
+  </div>
+</div>
+
+<div class="picker" id="picker" role="dialog" aria-modal="true" aria-labelledby="pk-title" hidden>
+  <div class="pk-panel">
+    <div class="pk-head">
+      <h2 id="pk-title">从图库里挑一张</h2>
+      <button type="button" id="pk-close">关闭</button>
+    </div>
+    <div class="pk-tabs" id="pk-groups" role="group" aria-label="大类"></div>
+    <div class="pk-tabs pk-tabs-sub" id="pk-subs" role="group" aria-label="细分类"></div>
+    <div class="pk-grid" id="pk-grid"></div>
+    <p class="pk-note" id="pk-note"></p>
   </div>
 </div>
 

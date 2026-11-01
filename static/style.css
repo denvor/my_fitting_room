@@ -59,9 +59,6 @@ input.url {
 .problems { margin: .9rem 0 0; padding-left: 1.1rem; font: .85rem/1.7 var(--mono); color: var(--stitch); }
 .save-state { align-self: center; font: .85rem/1 var(--mono); color: var(--ink-soft); }
 
-/* 两张取景框 */
-.frames { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-
 .frame {
   position: relative;
   display: flex;
@@ -186,10 +183,81 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .pager button { padding: .45rem .85rem; font: 500 .9rem/1 var(--mono); }
 .pager button[aria-current="page"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
 
+/* 试穿分类：选中态是一句划粉笔的虚线，不是实心药丸 —— 虚线在这页已经表示"点这里" */
+.modes { display: flex; flex-wrap: wrap; gap: 1.2rem; margin: 0 0 1.5rem; }
+
+.mode {
+  display: flex; flex-direction: column; align-items: flex-start; gap: .25rem;
+  padding: 0 0 .5rem; background: none; border: 0; border-bottom: 2px dashed transparent;
+  color: var(--ink-soft); font: 600 1.05rem/1.3 var(--serif); letter-spacing: .03em; cursor: pointer;
+}
+
+.mode-n { font: .74rem/1 var(--mono); color: var(--ink-soft); opacity: .75; }
+.mode:hover { color: var(--chalk); }
+.mode[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--chalk); }
+.mode[aria-pressed="true"] .mode-n { color: var(--chalk); opacity: 1; }
+
+/* 取景框：套装那次是三格，列数由页面按分类给 --cols */
+.frames { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 1rem; }
+
+.frame-lib {
+  position: absolute; right: .5rem; top: .5rem; z-index: 2;
+  padding: .32rem .55rem; background: rgba(233, 236, 231, .92);
+  border: 1px solid var(--line); color: var(--ink-soft); font: .76rem/1 var(--mono);
+}
+
+.frame-lib:hover { color: var(--chalk); border-color: var(--chalk); }
+
+/* sample 图库弹层：暗底和灯箱同一套，面板是纸面，不给圆角和阴影 */
+.picker {
+  position: fixed; inset: 0; overflow: auto; z-index: 20; /* 取景框里那颗按钮是 z-index:2，不给层级它会盖在弹层上 */
+  display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  background: rgba(30, 37, 34, .9);
+}
+
+.picker[hidden] { display: none; }
+
+.pk-panel {
+  width: min(56rem, 100%); max-height: 88vh; overflow: auto;
+  padding: 1.2rem 1.3rem 1.4rem; background: var(--paper); border: 1px solid var(--line);
+}
+
+.pk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.pk-head h2 { margin: 0; font: 600 1.25rem/1.3 var(--serif); letter-spacing: .03em; }
+.pk-head button { padding: .4rem .8rem; background: var(--surface); color: var(--ink-soft); font: .82rem/1 var(--mono); }
+
+.pk-tabs { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0 0 .8rem; }
+.pk-tabs button {
+  padding: .35rem .7rem; background: none; border: 1px solid transparent; border-bottom-color: var(--line);
+  color: var(--ink-soft); font: .82rem/1 var(--mono); cursor: pointer;
+}
+.pk-tabs button:hover { color: var(--chalk); }
+.pk-tabs button[aria-current="true"] {
+  color: var(--ink); background: var(--surface); border-color: var(--chalk); border-bottom-style: dashed;
+}
+.pk-tabs-sub { margin-top: -.3rem; }
+.pk-tabs-sub:empty { display: none; }
+
+.pk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr)); gap: .7rem; }
+
+.pk-item {
+  display: block; padding: 0; background: none; border: 1px solid var(--line); cursor: pointer;
+}
+.pk-item img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; }
+.pk-item span {
+  display: block; padding: .3rem .45rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font: .72rem/1.3 var(--mono); color: var(--ink-soft);
+}
+.pk-item:hover img, .pk-item:focus-visible img { outline: 2px dashed var(--chalk); outline-offset: -4px; }
+.pk-item:disabled { opacity: .5; cursor: progress; }
+
+.pk-note { margin: 1rem 0 0; font: .78rem/1.7 var(--mono); color: var(--ink-soft); }
+
 /* 大图 */
 .lightbox {
   position: fixed;
   inset: 0;
+  z-index: 20;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -216,6 +284,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 42rem) {
   body { padding: 1.5rem 1rem 3rem; }
   .frames { grid-template-columns: 1fr; }
+  .modes { gap: .9rem; }
+  .pk-grid { grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr)); }
   .lb-row { flex-wrap: wrap; }
   .lb-main { order: -1; }
   .lb-main img { max-height: 58vh; max-width: 88vw; }

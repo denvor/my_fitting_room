@@ -12,14 +12,29 @@ const ESTIMATE_MS = {
 };
 const BANDS = ["480p", "720p", "1k", "2k"]; // 和后端 prefs.VALID_SIZES 同一套顺序
 const BAND_LABEL = { "480p": "480p", "720p": "720p", "1k": "1K", "2k": "2K" }; // 低档大写会变成 480P，那是型号写法不是这里要的
-const LOCAL_WAIT = { "480p": "约 26 秒", "720p": "约 70 秒", "1k": "约 95 秒", "2k": "约 9 分钟" };
+const LOCAL_SECONDS = { "480p": 26, "720p": 70, "1k": 95, "2k": 540 }; // 单件那档四个点都是同机实测
+// 多一张参考图要多花多少时间。2026-11-01 同机 720p 实测：单件 70.5/70.6 秒，套装 95.2/96.2 秒，换发型 67.1 秒。
+// 只有 720p 这一档是量出来的，别的档位是照这个比例推的（进度条本来就是估算，确认框里会说清）。
+const MODE_FACTOR = { single: 1, hair: 1, outfit: 1.36 };
 let genSource = "api"; // 由 api/quota 回填，进度基数、确认框、页眉都看它
 let genSize = "1k"; // 同上，档位决定浏览器压到多大、以及一次花多少 credit
 
 const PAGE_SIZE = 5; // 图库每页几条
 
+// 分类：槽位字段和名字与 tryon/prompt.py 的 REF_SLOTS / SLOT_LABELS 是同一套（这个项目里前端一直这样镜像后端表）。
+// 名字必须一字不差 —— 后端报"没有收到裤子照片图片"，页面上写的却是别的字，人就对不上号。
+const MODES = { single: "一件衣服", outfit: "上衣加裤子", hair: "换个发型" };
+const MODE_SLOTS = { single: ["garment"], outfit: ["garment", "garment2"], hair: ["garment"] };
+const SLOT_TEXT = {
+  single: [["衣服照片", "只放这一件，拍清款式和细节"]],
+  outfit: [["上衣照片", "上衣单独一张，拍清领口和门襟"], ["裤子照片", "平铺或挂拍都行，整条拍全"]],
+  hair: [["发型参考", "要看清长度、层次和分缝的那张"]],
+};
+const ALL_SLOTS = ["garment", "garment2"];
+
 const $ = (id) => document.getElementById(id);
-const files = { person: null, garment: null };
+let mode = "single"; // 由 localStorage 回填，只认 MODES 里有的那几个
+const files = { person: null, garment: null, garment2: null };
 let ticker = null;
 let currentRecord = null;
 let records = [];
@@ -36,19 +51,42 @@ const PREVIEW_SIDE = 720; // 取景框就这么大，没必要画 3072×4096 的
 // 两档低档和 1K 用同一个输入上限：实测输入 1.77M 和 0.31M 都是 26 秒，缩输入一分时间都不省，只丢条件。
 const UPLOAD_SIDE = { "480p": 1536, "720p": 1536, "1k": 1536, "2k": 2048 };
 const UPLOAD_QUALITY = 0.92; // 和服务端那次重编码对齐，少一次有损压缩
-const previewUrls = { person: "", garment: "" };
-const working = { person: false, garment: false }; // 还在处理的那一格
+const previewUrls = { person: "", garment: "", garment2: "" };
+const working = { person: false, garment: false, garment2: false }; // 还在处理的那一格
+
+// 选图的两条路都汇到这里：本地文件、图库里挑的那张，进了槽位就没有区别了
+function setSlotFile(kind, file) {
+  files[kind] = file; // 上传前一直是原图，压缩推迟到点「开始试穿」之后
+  working[kind] = true;
+  setPickLabel(kind);
+  readyToGo();
+  showPreviewOnly(kind, file);
+}
+
+function clearSlot(kind) {
+  files[kind] = null;
+  working[kind] = false;
+  URL.revokeObjectURL(previewUrls[kind]);
+  previewUrls[kind] = "";
+  const preview = $(`${kind}-preview`);
+  preview.hidden = true;
+  preview.removeAttribute("src");
+  $(`frame-${kind}`).classList.remove("has-image");
+  $(kind).value = "";
+  setPickLabel(kind);
+}
 
 function bindFrame(kind) {
   $(kind).addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    files[kind] = file; // 上传前一直是原图，压缩推迟到点「开始试穿」之后
     e.target.value = ""; // 不清空的话，连续选同一张图不会再触发 change
-    working[kind] = true;
-    setPickLabel(kind);
-    readyToGo();
-    showPreviewOnly(kind, file);
+    setSlotFile(kind, file);
+  });
+  $(`frame-${kind}`).addEventListener("click", (e) => {
+    if (e.target.closest(".frame-lib")) return; // 那颗按钮走图库那条路
+    if (e.target === $(kind)) return; // 点到隐藏的文件输入本身：浏览器已经在开选择框了，别再开一次
+    $(kind).click(); // 取景框现在是个 div，不像 label 那样自带点开选择框
   });
 }
 
@@ -117,17 +155,28 @@ function showPreviewBlob(kind, blob) {
   $(`frame-${kind}`).classList.add("has-image");
 }
 
+const slotLabel = (kind) => SLOT_TEXT[mode][slotsFor(mode).indexOf(kind)][0];
+
 function goDisabled() {
   // 三个来源任一都按住：图片还在处理、自己这个请求在飞、服务端有任务在跑（后端锁）
-  return Boolean(serverBusy) || localBusy || working.person || working.garment || !(files.person && files.garment);
+  const slots = slotsFor(mode);
+  if (serverBusy || localBusy) return true;
+  if (working.person || slots.some((kind) => working[kind])) return true;
+  return !(files.person && slots.every((kind) => files[kind]));
 }
 
 function hintText() {
-  if (working.person || working.garment) return "图片还在处理…";
+  const slots = slotsFor(mode);
+  if (working.person || slots.some((kind) => working[kind])) return "图片还在处理…";
   if (serverBusy)
     return `上一次还在跑（${serverBusy.source === "comfyui" ? "本地 ComfyUI" : "API"} · 已 ${serverBusy.age_s} 秒），结束前不能再点。`;
-  if (files.person && files.garment) return "";
-  return files.person ? "还差衣服照片。" : files.garment ? "还差本人照片。" : "两张都选好才能开始。";
+  const need = [];
+  if (!files.person) need.push("你自己的照片");
+  for (const kind of slots) if (!files[kind]) need.push(slotLabel(kind));
+  if (!need.length) return "";
+  // 一张都没选时说"几张都选好"，选了一半时得说还差哪几张 —— 后者要认得人已经放进来的那张
+  if (need.length === slots.length + 1) return `${need.length} 张都选好才能开始。`;
+  return `还差${need.join("和")}。`;
 }
 
 function applyGoState() {
@@ -197,7 +246,9 @@ function startTape(prefix = "生成中") {
   showTape();
   const step = () => {
     const elapsed = Date.now() - startedAt;
-    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / ESTIMATE_MS[`${genSource}-${genSize}`]))));
+    // 第二张参考图那 1.36 倍只在本地这条量过，API 那边没依据，所以不加进去
+    const base = (ESTIMATE_MS[`${genSource}-${genSize}`] || 90000) * (genSource === "comfyui" ? MODE_FACTOR[mode] || 1 : 1);
+    setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / base))));
     $("readout").textContent = `${prefix} · ${Math.round(elapsed / 1000)} 秒`;
   };
   step();
@@ -213,15 +264,18 @@ function stopTape() {
 
 function usageLine(meta, elapsed) {
   const u = meta.usage || {};
+  const kind = meta.mode && meta.mode !== "single" ? MODES[meta.mode] : null; // 单件是默认，不必每行都写
   if (meta.source === "comfyui") {
     // 本地这条没有接口回传的那套档位字段，说清是谁出的、哪一档、多大、多久就够
     const local = ["本地 ComfyUI"];
     if (meta.band) local.push(`${BAND_LABEL[meta.band] || meta.band} 档`); // 低档不能大写，那是 480P
     if (u.output_width && u.output_height) local.push(`输出 ${u.output_width}×${u.output_height}`);
+    if (kind) local.splice(1, 0, kind);
     local.push(`用时 ${elapsed} 秒`);
     return local;
   }
   const parts = [];
+  if (kind) parts.push(kind);
   if (u.output_width && u.output_height) parts.push(`输出 ${u.output_width}×${u.output_height}`);
   if (u.output_image_type) parts.push(`${u.output_image_type.replace("qima_output_", "").toUpperCase()} 档`);
   if (u.output_image_count) parts.push(`${u.output_image_count} 张`);
@@ -262,30 +316,41 @@ function setBusy(busy) {
   applyGoState();
 }
 
+// 页眉和确认框共用这一句：单件那档四个点都量过，两个新分类只有 720p 是实测，
+// 别的档位是照 720p 那两个点乘 1.36 推的 —— 推的就说是推的。
+function waitText() {
+  const raw = (LOCAL_SECONDS[genSize] || 0) * (MODE_FACTOR[mode] || 1);
+  const s = raw >= 60 ? Math.round(raw / 5) * 5 : Math.round(raw);
+  const shown = s >= 120 ? `${Math.round(s / 60)} 分钟` : `${s} 秒`;
+  return mode === "single" || genSize === "720p" ? `实测约 ${shown}` : `约 ${shown}（按 720p 的实测点推）`;
+}
+
 function confirmStart() {
   const band = BAND_LABEL[genSize];
   if (genSource === "comfyui") {
     return confirm(
-      `开始试穿？\n\n本机 ComfyUI 生成 · ${band} 档 · 不花额度 · 实测${LOCAL_WAIT[genSize]}。\n\n取消不动图片。`
+      `开始试穿？\n\n本机 ComfyUI 生成 · ${MODES[mode]} · ${band} 档 · 不花额度 · ${waitText()}。\n\n取消不动图片。`
     );
   }
   const cost = quota
     ? `会花掉 ${quota.per} credit（${band} 档），本月还能试穿 ${quota.times} 次。`
     : `会花掉一次 ${band} 生成的额度（额度查不到）。`;
   const wait = genSize === "2k" ? "要等约 2–3 分钟。" : "要等约 80–100 秒。";
-  return confirm(`开始试穿？\n\n${cost}${wait}\n\n取消不动图片，也不扣额度。`);
+  return confirm(`开始试穿？\n\n${MODES[mode]} · ${cost}${wait}\n\n取消不动图片，也不扣额度。`);
 }
 
 async function submit() {
-  if (!files.person || !files.garment) return;
+  const slots = slotsFor(mode);
+  if (!files.person || !slots.every((kind) => files[kind])) return;
   if (!confirmStart()) return; // 一次点击就是一条额度，得能反悔
   setBusy(true);
   showTape();
   $("readout").textContent = "压缩中…"; // 这一步只在点下去之后发生，选图时不挡手
 
   const form = new FormData();
+  form.append("mode", mode); // 分类决定服务端发哪条指令、收几张参考图
   form.append("person", await uploadFileFor("person"));
-  form.append("garment", await uploadFileFor("garment"));
+  for (const kind of slots) form.append(kind, await uploadFileFor(kind));
   setUploadPct(0, 0);
 
   // 上传段是浏览器给的真实进度；传完才切换到估算的生成进度
@@ -317,7 +382,7 @@ async function loadQuota() {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
       // 本地这条不查额度，也不假装知道 ComfyUI 连不连得上；秒数是同机实测的那三个点
-      el.textContent = `本机 ComfyUI · ${BAND_LABEL[genSize]} 档 · 不花额度 · 实测${LOCAL_WAIT[genSize]}`;
+      renderLocalLine();
       return;
     }
     if (body.ok) {
@@ -362,6 +427,152 @@ async function checkComfyOnLoad() {
   );
 }
 
+// —— 分类：槽位、名字、提示都跟着它变 ——
+
+
+function slotsFor(m) {
+  return MODE_SLOTS[m] || MODE_SLOTS.single;
+}
+
+function applyMode(next) {
+  mode = MODES[next] ? next : "single"; // 存过的值不认识就回默认，不报错
+  try {
+    localStorage.setItem("tryon.mode", mode);
+  } catch {
+    /* 隐私模式下存不上，不影响这一次 */
+  }
+  const slots = slotsFor(mode);
+  $("frames").style.setProperty("--cols", String(1 + slots.length)); // 人像 + 参考图
+  for (const btn of $("modes").children) btn.setAttribute("aria-pressed", String(btn.dataset.mode === mode));
+  for (const kind of ALL_SLOTS) {
+    const frame = $(`frame-${kind}`);
+    if (!slots.includes(kind)) {
+      frame.hidden = true;
+      if (files[kind]) clearSlot(kind); // 藏起来的槽不许还在提交里
+      continue;
+    }
+    frame.hidden = false;
+    const [name, hint] = SLOT_TEXT[mode][slots.indexOf(kind)];
+    frame.querySelector(".frame-name").textContent = name;
+    frame.querySelector(".frame-hint").textContent = hint;
+  }
+  renderLocalLine(); // 换分类就是换耗时那句要说给页眉的话
+  readyToGo();
+}
+
+// —— sample 图库弹层 ——
+
+let tree = null; // 目录树，开弹层时拉一次；null = 没拉到
+let pkSlot = "garment";
+let pkGroup = 0;
+let pkSub = 0;
+
+async function openPicker(kind) {
+  pkSlot = kind;
+  const name = kind === "person" ? "你自己的照片" : slotLabel(kind);
+  $("pk-title").textContent = `从图库里挑一张 · ${name}`;
+  $("picker").hidden = false;
+  $("pk-note").textContent = "挑图加载中…";
+  try {
+    const r = await fetch("api/samples");
+    tree = r.ok ? (await r.json()).groups || [] : null;
+  } catch {
+    tree = null; // 服务没起来：弹层里说一句就行，别拿一句弹窗挡人
+  }
+  renderPicker();
+}
+
+function closePicker() {
+  $("picker").hidden = true;
+}
+
+function renderPicker() {
+  const groups = tree || [];
+  pkGroup = Math.min(pkGroup, Math.max(0, groups.length - 1));
+  const subs = groups[pkGroup] ? groups[pkGroup].subs : [];
+  if (!groups.length) {
+    $("pk-subs").replaceChildren();
+    $("pk-grid").replaceChildren();
+    $("pk-note").textContent = note();
+    return;
+  }
+  pkSub = Math.min(pkSub, Math.max(0, subs.length - 1));
+
+  $("pk-groups").replaceChildren(
+    ...groups.map((g, i) => tab(g.group, i === pkGroup, () => {
+      pkGroup = i;
+      pkSub = 0;
+      renderPicker();
+    }))
+  );
+  // 一个大类只有一节时（发型那些没细分的），再来一排 tab 是废话
+  const single = subs.length === 1 && subs[0].name === groups[pkGroup].group;
+  const subTabs = single ? [] : subs.map((s, i) => tab(s.name, i === pkSub, () => {
+    pkSub = i;
+    renderPicker();
+  }));
+  $("pk-subs").replaceChildren(...subTabs);
+
+  const items = subs[pkSub] ? subs[pkSub].items : [];
+  $("pk-grid").replaceChildren(...items.map((item) => cell(item)));
+  $("pk-note").textContent = note();
+}
+
+function tab(label, on, click) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = label;
+  if (on) btn.setAttribute("aria-current", "true");
+  btn.addEventListener("click", click);
+  return btn;
+}
+
+function cell(item) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pk-item";
+  const img = document.createElement("img");
+  img.src = item.thumb;
+  img.alt = item.name;
+  img.loading = "lazy";
+  const cap = document.createElement("span");
+  cap.textContent = item.name;
+  btn.append(img, cap);
+  btn.addEventListener("click", () => pickFromLibrary(item, btn));
+  return btn;
+}
+
+function note() {
+  if (!tree) return "图库读不到：连不上本机服务，或者还没登录。";
+  if (!tree.length)
+    return "图库还是空的。把图片放进 data/samples/男装/上衣/ 这样的目录（大类/细分类/图.jpg），回到这里重开一次就有。";
+  return `共 ${tree.reduce((n, g) => n + g.subs.reduce((m, s) => m + s.items.length, 0), 0)} 张 · 挑中的会填进「${
+    pkSlot === "person" ? "你的照片" : slotLabel(pkSlot)
+  }」那一格。`;
+}
+
+async function pickFromLibrary(item, btn) {
+  btn.disabled = true; // 取一张原图也要一两秒，按住免得连点两次
+  try {
+    const r = await fetch(item.url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const ext = { "image/png": ".png", "image/webp": ".webp" }[blob.type] || ".jpg";
+    setSlotFile(pkSlot, new File([blob], `${item.name}${ext}`, { type: blob.type || "image/jpeg" }));
+    closePicker();
+  } catch (e) {
+    $("pk-note").textContent = `那张取不过来（${e.message}）。换一张，或者从本地选。`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// 页眉那一行：只有走本地时它带着秒数，而秒数现在要看分类
+function renderLocalLine() {
+  if (genSource !== "comfyui") return;
+  $("quota").textContent = `本机 ComfyUI · ${MODES[mode]} · ${BAND_LABEL[genSize]} 档 · 不花额度 · ${waitText()}`;
+}
+
 function recordCell(rec) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -369,13 +580,17 @@ function recordCell(rec) {
   btn.dataset.result = rec.files.result;
   btn.dataset.person = rec.files.person;
   btn.dataset.garment = rec.files.garment;
+  btn.dataset.garment2 = rec.files.garment2 || "";
+  btn.dataset.mode = rec.meta.mode || "single";
   btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
   const badge = document.createElement("span");
   badge.className = "src-badge";
   badge.textContent = rec.meta.source === "comfyui" ? "本地" : "API";
   badge.setAttribute("aria-hidden", "true"); // 来源在灯箱标题里也有一份，这里只是给眼睛看的
   btn.append(badge);
-  for (const [key, alt] of [["person", "本人照片"], ["garment", "衣服照片"], ["result", "试穿成品"]]) {
+  const shown = [["person", "本人照片"], ["garment", slotCap(rec.meta.mode, 0)], ["result", "试穿成品"]];
+  if (rec.files.garment2) shown.splice(2, 0, ["garment2", slotCap(rec.meta.mode, 1)]);
+  for (const [key, alt] of shown) {
     const img = document.createElement("img");
     img.src = key === "result" ? rec.files.thumb : rec.files[key];
     img.alt = alt;
@@ -421,9 +636,22 @@ async function loadGallery(gotoFirst) {
   renderGallery();
 }
 
-function openLightbox({ result, person, garment, caption, id }) {
+// 记录里那两张参考图按分类叫什么：单件是衣服，套装是上衣和裤子，发型那次是发型参考
+function slotCap(m, index) {
+  const table = SLOT_TEXT[m] || SLOT_TEXT.single; // 老记录里没有 mode，按单件读
+  return (table[index] || ["参考图"])[0];
+}
+
+function openLightbox({ result, person, garment, garment2, caption, id, mode: m }) {
   $("lb-person").src = person;
   $("lb-garment").src = garment;
+  $("lb-garment-cap").textContent = slotCap(m, 0);
+  const second = $("lb-ref2");
+  second.hidden = !garment2;
+  if (garment2) {
+    $("lb-garment2").src = garment2;
+    $("lb-garment2-cap").textContent = slotCap(m, 1);
+  }
   $("lb-img").src = result;
   $("lb-caption").textContent = caption;
   $("lb-download").href = result;
@@ -433,7 +661,7 @@ function openLightbox({ result, person, garment, caption, id }) {
 
 function closeLightbox() {
   $("lightbox").hidden = true;
-  for (const id of ["lb-img", "lb-person", "lb-garment"]) $(id).removeAttribute("src");
+  for (const id of ["lb-img", "lb-person", "lb-garment", "lb-garment2"]) $(id).removeAttribute("src");
 }
 
 async function deleteCurrent() {
@@ -450,12 +678,23 @@ async function deleteCurrent() {
 
 bindFrame("person");
 bindFrame("garment");
+bindFrame("garment2");
+for (const btn of $("modes").children) btn.addEventListener("click", () => applyMode(btn.dataset.mode));
+for (const btn of document.querySelectorAll(".frame-lib"))
+  btn.addEventListener("click", () => openPicker(btn.dataset.slot));
+$("pk-close").addEventListener("click", closePicker);
+$("picker").addEventListener("click", (e) => { if (e.target === $("picker")) closePicker(); });
+applyMode(localStorage.getItem("tryon.mode") || "single"); // 上次点过的分类，页面一开就在
 $("go").addEventListener("click", submit);
 $("again").addEventListener("click", submit);
 $("lb-delete").addEventListener("click", deleteCurrent);
 $("lb-close").addEventListener("click", closeLightbox);
 $("lightbox").addEventListener("click", (e) => { if (e.target === $("lightbox")) closeLightbox(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  closeLightbox();
+  closePicker(); // 弹层开着时按 Esc 也该关，两个都关无害
+});
 loadGallery();
 loadQuota();
 checkComfyOnLoad(); // 本机不在线就在这儿说，别等点下去才报错
