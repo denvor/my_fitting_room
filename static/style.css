@@ -47,6 +47,7 @@ h1 {
 .radios { display: grid; gap: .55rem; }
 .radios label { display: flex; align-items: baseline; gap: .5rem; cursor: pointer; }
 .radios .sub { font: .8rem/1.5 var(--mono); color: var(--ink-soft); }
+.radios label:has(input:disabled) { opacity: .42; } /* 按住的那一项要说得出来为什么按着，别只是点不动 */
 input.url {
   font: .95rem/1.4 var(--mono);
   padding: .6rem .7rem;

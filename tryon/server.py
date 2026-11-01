@@ -17,6 +17,7 @@ from tryon.prefs import (
     DEFAULT_SIZE,
     VALID_SIZES,
     VALID_SOURCES,
+    fold_note,
     Prefs,
     clamp_size,
     load_prefs,
@@ -134,7 +135,7 @@ def create_app(
             return _fail("settings", f"尺寸只能是 480p、720p、1K 或 2K，收到的是 {size!r}", 400)
         chosen = clamp_size(source, size)
         # 回落要说出来：静默把用户刚点的那一项改掉，比报错更难查
-        note = "" if chosen == size else f"{size} 只有本机 ComfyUI 有这一档，接口那边最低就是 1K，已按 1K 存下"
+        note = "" if chosen == size else fold_note(size)
         try:
             save_prefs(prefs_path, Prefs(source, comfy_url, chosen))
         except OSError as e:  # 存不下来要说出来，别静默回到默认值

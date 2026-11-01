@@ -26,17 +26,23 @@ function setState(text) {
 // 低于 1K 的两档是本地专属：接口按面积分档、最低就是 1K（实测请求 0.31M 照样扣 58，出的还是参考图尺寸）。
 // 这里按住不给选，后端 clamp_size 还会再收一次（那份表在 tryon/prefs.py 的 LOCAL_ONLY_SIZES），两边说的是同一件事。
 const LOCAL_ONLY = ["480p", "720p"];
+// 反方向：2K 在本机 ComfyUI 这条按住 —— 同机实测 543 秒，而线上 uwsgi 的 harakiri 是 120 秒，
+// 跑到两分钟就被掐，选了只会拿到一个失败。后端 prefs.API_ONLY_SIZES 是同一份规则。
+const API_ONLY = ["2k"];
+const BAND_LABEL = { "480p": "480p", "720p": "720p", "1k": "1K", "2k": "2K" };
 
 function applySourceLock() {
   const api = chosenSource() === "api";
   const chosen = chosenSize();
-  for (const value of LOCAL_ONLY) {
+  const blocked = api ? LOCAL_ONLY : API_ONLY; // 来源决定按住哪几档
+  for (const value of [...LOCAL_ONLY, ...API_ONLY]) {
     const input = document.querySelector(`input[name="size"][value="${value}"]`);
-    if (input) input.disabled = api;
+    if (input) input.disabled = blocked.includes(value);
   }
-  if (api && LOCAL_ONLY.includes(chosen)) {
+  if (blocked.includes(chosen)) {
     document.querySelector('input[name="size"][value="1k"]').checked = true;
-    setState(`${chosen} 只有本机 ComfyUI 有这一档，已改回 1K`);
+    const why = api ? "只有本机 ComfyUI 有这一档" : "本机 ComfyUI 这条要跑九分钟，不给选";
+    setState(`${BAND_LABEL[chosen] || chosen} ${why}，已改回 1K`);
   }
 }
 

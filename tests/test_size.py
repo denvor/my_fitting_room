@@ -7,7 +7,7 @@ from PIL import Image
 
 from tryon.comfy_api import comfy_resolution
 from tryon.image_prep import api_size, out_area, max_side, prepare_upload
-from tryon.prefs import DEFAULT_SIZE, VALID_SIZES, Prefs, load_prefs, save_prefs
+from tryon.prefs import DEFAULT_SIZE, VALID_SIZES, Prefs, clamp_size, load_prefs, save_prefs
 from tryon.quota import CREDITS_PER_1K, CREDITS_PER_2K, credits_for
 from tryon.server import create_app
 from tryon.settings import Settings, load_settings
@@ -160,7 +160,7 @@ def test_default_size_is_1k():
 def test_prefs_size_round_trips(tmp_path):
     f = tmp_path / "settings.json"
     # 存的是非默认值，才证明这字段真的往返了，而不是回退到默认刚好撞上
-    save_prefs(f, Prefs("comfyui", "http://127.0.0.1:8188", "2k"))
+    save_prefs(f, Prefs("api", "http://127.0.0.1:8188", "2k"))
     assert load_prefs(f, Prefs()).size == "2k"
 
 
@@ -179,7 +179,7 @@ def test_prefs_without_size_field_falls_back_to_default(tmp_path):
 def test_bad_size_value_only_costs_that_field(tmp_path):
     f = tmp_path / "settings.json"
     save_prefs(f, Prefs("api", "http://127.0.0.1:8188", "4k"))
-    reloaded = load_prefs(f, Prefs("comfyui", "http://x", "2k"))
+    reloaded = load_prefs(f, Prefs("api", "http://x", "2k"))
     assert reloaded.size == "2k" and reloaded.source == "api"
 
 
@@ -222,6 +222,25 @@ def test_conflicting_env_defaults_get_clamped_too(tmp_path, band):
     assert load_prefs(tmp_path / "没有这个文件.json", Prefs("api", "http://x", band)).size == "1k"
 
 
+def test_two_k_is_only_the_api_paths_band():
+    """本地 2K 实测 543 秒，而线上 uwsgi.ini 里 harakiri = 120 —— 那一档在本机这条走不完，不给选。"""
+    assert clamp_size("comfyui", "2k") == "1k"
+    assert clamp_size("api", "2k") == "2k"  # 接口那条照旧：108 credit、时间也没本地这么久
+
+
+def test_a_saved_local_2k_folds_on_load(tmp_path):
+    f = tmp_path / "settings.json"
+    f.write_text(SAVED_2K_COMFY, encoding="utf-8")
+    assert load_prefs(f, Prefs()).size == "1k"
+
+
+def test_the_settings_page_folds_2k_and_says_why(tmp_path):
+    client = make(tmp_path, Recording(), prefs_text=None).test_client()
+    r = client.post("/api/settings", json={"source": "comfyui", "comfy_url": "http://x", "size": "2k"})
+    body = r.get_json()
+    assert body["size"] == "1k" and "2K" in body["size_note"] and "2K" not in body["size"]
+
+
 def test_every_band_has_its_own_local_timeout():
     # comfy_api.generate 按档位查超时上限，缺一项就是选到那一档时 KeyError
     from tryon.comfy_api import TIMEOUT_BY_SIZE
@@ -238,11 +257,11 @@ class Recording:
         self.comfy_size = []
         self.upload_sizes = []
 
-    def api_fn(self, settings, person, garment, timeout=600):
+    def api_fn(self, settings, person, refs, prompt, timeout=600):
         self.api_settings.append(settings)
         raise RuntimeError("验到请求就够了")
 
-    def comfy_fn(self, comfy_url, person, garment, timeout=300, size="1k"):
+    def comfy_fn(self, comfy_url, person, refs, prompt, timeout=300, size="1k"):
         self.comfy_size.append(size)
         from tryon.comfy_api import ComfyUnavailable
 
@@ -305,11 +324,12 @@ def test_api_path_honours_a_saved_2k_choice(tmp_path):
     assert rec.api_settings[0].size == "2k"
 
 
-def test_local_path_gets_the_selected_band(tmp_path):
+def test_a_saved_local_2k_never_reaches_the_comfy_client(tmp_path):
+    """存过 2K 的人切到本机 ComfyUI：生成时得按 1K 走，而不是偷偷跑一个九分钟的任务。"""
     rec = Recording()
     client = make(tmp_path, rec, prefs_text=SAVED_2K_COMFY).test_client()
     post_tryon(client)
-    assert rec.comfy_size == ["2k"]
+    assert rec.comfy_size == ["1k"]
 
 
 @pytest.mark.parametrize("band", LOW_BANDS)
