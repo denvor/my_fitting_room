@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from tryon import comfy_api
 from tryon.auth import DEFAULT_SECRET_FILE, init_auth
@@ -25,6 +25,7 @@ from tryon.prefs import (
 from tryon.prompt import REF_FIELDS, REF_SLOTS, SLOT_LABELS, VALID_MODES, prompt_for
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
+from tryon.samples import SampleRejected, list_samples, sample_path, sample_thumb
 from tryon.records import (
     FILE_BASENAMES,
     RECORD_ID_RE,
@@ -77,6 +78,7 @@ def create_app(
     comfy_health_fn=comfy_api.healthy,
     prefs_file: Path | str | None = None,
     secret_file: Path | str | None = None,
+    samples_dir: Path | str | None = None,
 ) -> Flask:
     app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
@@ -85,6 +87,7 @@ def create_app(
     prefs_path = Path(prefs_file) if prefs_file else root_path.parent / "settings.json"
     # 生成锁和设置、密钥住同一个 data 目录：跨 worker 才拦得住（threading.Lock 每进程一把）
     lock_path = root_path.parent / LOCK_NAME
+    samples_path = Path(samples_dir) if samples_dir else root_path.parent / "samples"
     # 口令为空时网关整个不装，所以连签名密钥都不会去生成（测试不该在 tmp_path 外落文件）
     init_auth(app, settings, Path(secret_file) if secret_file else DEFAULT_SECRET_FILE, STATIC_DIR)
     # .env 的两个可选键是默认值，设置页存过的值覆盖它们（README 与 §5 都这么承诺）
@@ -206,6 +209,27 @@ def create_app(
             )
         except QuotaUnavailable as e:
             return jsonify({"ok": False, "source": "api", "message": str(e), "busy": busy})
+
+    @app.get("/api/samples")
+    def api_samples():
+        """sample 图库的目录树：选图时"从图库里挑"就是从这里来的。"""
+        return jsonify({"ok": True, "groups": list_samples(samples_path)})
+
+    @app.get("/samples/<path:rel>")
+    def api_sample_file(rel: str):
+        return _send_sample(rel, thumb=False)
+
+    @app.get("/samples/thumb/<path:rel>")
+    def api_sample_thumb(rel: str):
+        return _send_sample(rel, thumb=True)
+
+    def _send_sample(rel: str, thumb: bool):
+        """图库里的图不在库里就说 404：路径怎么写都不能让 /etc 或隔壁站的文件从这条出去。"""
+        try:
+            path = sample_thumb(samples_path, rel) if thumb else sample_path(samples_path, rel)
+        except (SampleRejected, OSError) as e:
+            return _fail("sample", f"图库里没有这张：{rel}", 404, detail=str(e))
+        return send_file(path, conditional=True)
 
     @app.get("/api/records")
     def api_records_list():
