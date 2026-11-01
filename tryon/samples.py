@@ -6,6 +6,7 @@
 """
 
 import os
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -105,14 +106,19 @@ def _mkdir_private(path: Path, stop: Path) -> None:
         missing.append(d)
         d = d.parent
     for parent in reversed(missing):
-        parent.mkdir(mode=DIR_MODE)
-        os.chmod(parent, DIR_MODE)
+        # exist_ok 不是防御性写法：网格一次要几十张缩略图，两个人同时建同一层是真会发生的
+        # （2026-11-01 浏览器实测就 404 了一格，报的是 FileExistsError → 路由当成"库里没这张"）
+        parent.mkdir(mode=DIR_MODE, exist_ok=True)
+        os.chmod(parent, DIR_MODE)  # 已存在的那层不会被 mkdir 的 mode 管到，得自己收
 
 
 def _write_private(path: Path, blob: bytes, stop: Path) -> None:
     _mkdir_private(path.parent, stop)
-    path.write_bytes(blob)
-    os.chmod(path, FILE_MODE)
+    # 先写临时名再 replace：直接 write_bytes 的话，另一个人可能正读到半截 JPEG
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(blob)
+    os.replace(tmp, path)  # mkstemp 建的本来就是 0600，replace 保留源文件权限
 
 
 def sample_thumb(root: Path | str, rel: str) -> Path:

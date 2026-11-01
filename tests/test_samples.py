@@ -5,6 +5,7 @@
 
 import json
 import shutil
+import threading
 
 import pytest
 from PIL import Image
@@ -133,6 +134,32 @@ def test_a_bigger_source_gets_a_newer_thumb(lib):
     assert Image.open(sample_thumb(lib, "男装/上衣/衬衫A.jpg")).size == (160, 240)
     jpg(lib, "男装/上衣/衬衫A.jpg", size=(900, 600), color=(10, 20, 30))  # 换一张同名的横图
     assert Image.open(sample_thumb(lib, "男装/上衣/衬衫A.jpg")).size == (240, 160)
+
+
+def test_parallel_thumbs_of_one_image_never_raise(lib):
+    """图库网格一次就要几十张缩略图，线上是 4 进程 × 2 线程：同一个缓存文件会有人同时建目录、同时写。
+
+    2026-11-01 浏览器实测就是这样 404 的 —— `mkdir` 没给 exist_ok，第二个人撞上 FileExistsError，
+    路由把它和"库里没这张"一起当成 404 报了出去。
+    """
+    barrier = threading.Barrier(8)
+    errors = []
+
+    def work():
+        barrier.wait()
+        try:
+            sample_thumb(lib, "男装/上衣/衬衫A.jpg")
+        except OSError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=work) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    cached = list((lib / ".thumbs" / "男装" / "上衣").iterdir())
+    assert [p.name for p in cached] == ["衬衫A.jpg"], "缓存目录里留了半截临时文件"
 
 
 def test_thumbnail_files_are_owner_only(lib, daemon_umask):
