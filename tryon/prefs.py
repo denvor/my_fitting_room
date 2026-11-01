@@ -5,6 +5,7 @@
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,16 +58,17 @@ def load_prefs(file: Path | str, defaults: Prefs | None = None) -> Prefs:
 
 
 def save_prefs(file: Path | str, prefs: Prefs) -> None:
-    """先写临时文件再 replace：别让半截设置文件把默认值带跑。写失败不兜，让调用方报错。"""
+    """先写临时文件再 replace：别让半截设置文件把默认值带跑。写失败不兜，让调用方报错。
+
+    临时名必须是**每次调用都不同**的，不能是写死的 `settings.json.tmp`：这台线上是 4 进程 × 2 线程，
+    同进程里两个请求就能撞在一起（首页那次自动切换和另一台手机的保存同时发生就是这种）。
+    撞上的坏法不只是 500 —— 谁先 `replace` 谁就把别人写进去的内容当成自己的存了盘。
+    """
     path = Path(file)
     # 700/600 写死，理由同 records.py：uWSGI 的 umask 是 0000，这里曾经落成过目录 777 + 文件 666
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(
-            {"source": prefs.source, "comfy_url": prefs.comfy_url, "size": prefs.size}, ensure_ascii=False
-        ),
-        encoding="utf-8",
-    )
-    os.chmod(tmp, 0o600)  # os.replace 保留源文件的权限
+    # mkstemp 建的临时文件本来就是 0600（umask 只能再往下削），replace 保留源文件权限 → 存完还是 0600
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"source": prefs.source, "comfy_url": prefs.comfy_url, "size": prefs.size}, fh, ensure_ascii=False)
     os.replace(tmp, path)

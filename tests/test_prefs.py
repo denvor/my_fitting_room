@@ -1,3 +1,7 @@
+import os
+import threading
+from pathlib import Path
+
 from tryon.prefs import DEFAULT_COMFY_URL, Prefs, load_prefs, save_prefs
 
 
@@ -40,6 +44,48 @@ def test_round_trip(tmp_path):
 def test_save_leaves_no_temp_file(tmp_path):
     """原子写：先 .tmp 再 replace，目录里不能留垃圾。"""
     save_prefs(tmp_path / "settings.json", Prefs("comfyui", "http://x:1"))
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+def test_two_concurrent_saves_do_not_share_a_temp_name(tmp_path, monkeypatch):
+    """临时文件名写死的话，两个写者会踩同一个文件：谁先 replace 谁就把别人写进去的内容当成自己的存盘。
+
+    2026-11-01 首页那次自动切换就是这么炸的 —— 一次页面加载发了两个 POST（`pageshow` 在首次加载也算），
+    日志里是 `FileNotFoundError: settings.json.tmp` 配一个 500，另一个请求报什么全看抢到哪一步。
+    """
+    names = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        names.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    save_prefs(tmp_path / "settings.json", Prefs("api", "http://x", "1k"))
+    save_prefs(tmp_path / "settings.json", Prefs("comfyui", "http://x", "2k"))
+    assert len(names) == 2 and names[0] != names[1], "两次保存用了同一个临时文件"
+    assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
+
+
+def test_parallel_saves_never_raise_and_the_file_stays_readable(tmp_path):
+    """真并发：八个线程各存一个档位，谁都不许抛，最后那份必须是能读回来的合法设置（uWSGI 多 worker）。"""
+    barrier = threading.Barrier(8)
+    errors = []
+
+    def work(size):
+        barrier.wait()
+        try:
+            save_prefs(tmp_path / "settings.json", Prefs("api", DEFAULT_COMFY_URL, size))
+        except OSError as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=work, args=(s,)) for s in ("1k", "2k") * 4]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    assert load_prefs(tmp_path / "settings.json").size in ("1k", "2k")
     assert [p.name for p in tmp_path.iterdir()] == ["settings.json"]
 
 
