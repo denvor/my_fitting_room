@@ -11,19 +11,21 @@ from pathlib import Path
 
 from PIL import Image
 
+from tryon.prompt import REF_FIELDS
+
 RECORD_ID_RE = re.compile(r"\d{8}-\d{6}-[0-9a-f]{4}")
 # 记录里是用户上传的人脸原图，所以权限写死而不是靠 umask（uWSGI 主进程的 umask 实测 0000）：
 # 只有跑服务的那个账号读得动。prefs.py 与 auth.py 建 data/ 时用的是同一套数字。
 RECORD_DIR_MODE = 0o700
 RECORD_FILE_MODE = 0o600
-_FILE_SUFFIX = {"person": "jpg", "garment": "jpg", "result": "png", "thumb": "jpg"}
+_FILE_SUFFIX = {"person": "jpg", "garment": "jpg", "garment2": "jpg", "result": "png", "thumb": "jpg"}
 THUMB_LONG_SIDE = 320
 # 结果图按接口实际返回的格式命名，不硬写成 .png
 RESULT_FORMAT_NAMES = {"PNG": "result.png", "JPEG": "result.jpg", "WEBP": "result.webp", "GIF": "result.gif"}
 DEFAULT_RESULT_NAME = "result.png"
-FILE_BASENAMES = tuple(
-    f"{name}.{_FILE_SUFFIX[name]}" for name in ("person", "garment", "thumb")
-) + tuple(RESULT_FORMAT_NAMES.values())
+# 第二张参考图只有套装那次会有，所以它不在"必须有"的那几项里（见 _has_images）
+_REF_NAMES = ("person", *REF_FIELDS, "thumb")
+FILE_BASENAMES = tuple(f"{name}.{_FILE_SUFFIX[name]}" for name in _REF_NAMES) + tuple(RESULT_FORMAT_NAMES.values())
 
 
 def result_filename(result: bytes) -> str:
@@ -48,7 +50,7 @@ def make_thumb(result: bytes, long_side: int = THUMB_LONG_SIDE) -> bytes:
 
 
 def save_record(
-    root: Path, rid: str, person: bytes, garment: bytes, result: bytes, meta: dict
+    root: Path, rid: str, person: bytes, refs: list[bytes], result: bytes, meta: dict
 ) -> dict[str, str]:
     if not RECORD_ID_RE.fullmatch(rid):
         raise ValueError(f"非法记录名：{rid}")
@@ -63,7 +65,7 @@ def save_record(
     meta = {**meta, "result_name": result_name}
     written = [
         (d / "person.jpg", person),
-        (d / "garment.jpg", garment),
+        *[(d / f"{field}.jpg", blob) for field, blob in zip(REF_FIELDS, refs)],
         (d / result_name, result),
         (d / "thumb.jpg", make_thumb(result)),
     ]
@@ -73,12 +75,13 @@ def save_record(
     meta_path = d / "meta.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
     os.chmod(meta_path, RECORD_FILE_MODE)
-    return _files_of(rid, result_name)
+    return _files_of(rid, result_name, len(refs) > 1)
 
 
-def _files_of(rid: str, result_name: str = DEFAULT_RESULT_NAME) -> dict[str, str]:
-    """记录里四张图对外的 URL。"""
-    files = {name: f"files/{rid}/{name}.{_FILE_SUFFIX[name]}" for name in ("person", "garment", "thumb")}
+def _files_of(rid: str, result_name: str = DEFAULT_RESULT_NAME, second: bool = False) -> dict[str, str]:
+    """记录里那几张图对外的 URL。套装才有第二张参考图，没有就不报这个键。"""
+    names = ("person", "garment", "thumb") + (("garment2",) if second else ())
+    files = {name: f"files/{rid}/{name}.{_FILE_SUFFIX[name]}" for name in names}
     files["result"] = f"files/{rid}/{result_name}"
     return files
 
@@ -106,7 +109,8 @@ def list_records(root: Path) -> list[dict]:
         result_name = meta.get("result_name", DEFAULT_RESULT_NAME)
         if not _has_images(d, result_name):
             continue
-        out.append({"id": d.name, "meta": meta, "files": _files_of(d.name, result_name)})
+        second = (d / f"{REF_FIELDS[1]}.jpg").is_file()  # 列表按磁盘上真有什么来报，不靠 meta 里的分类
+        out.append({"id": d.name, "meta": meta, "files": _files_of(d.name, result_name, second)})
     out.sort(key=lambda r: r["id"], reverse=True)
     return out
 

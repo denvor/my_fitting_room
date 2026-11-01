@@ -33,17 +33,27 @@ def root(tmp_path):
 
 
 def test_save_then_list_roundtrip_keeps_meta(root):
-    save_record(root, "20261026-113005-1f3a", PERSON, GARMENT, RESULT, META)
+    save_record(root, "20261026-113005-1f3a", PERSON, [GARMENT], RESULT, META)
     got = list_records(root)
     assert got[0]["id"] == "20261026-113005-1f3a"
     assert got[0]["meta"]["usage"]["output_image_count"] == 1
     assert got[0]["meta"]["elapsed_s"] == 56.2
 
 
+def test_second_reference_image_shows_up_in_the_listing(root):
+    """套装那次多了裤子那张：列表要把它一起报出去，老记录（本来就没这张）照旧读得动。"""
+    pants = img_bytes(800, 1200, (30, 40, 50))
+    save_record(root, "20261026-113005-1f3a", PERSON, [GARMENT, pants], RESULT, META)
+    save_record(root, "20261026-113006-2f3b", PERSON, [GARMENT], RESULT, META)
+    by_id = {rec["id"]: rec for rec in list_records(root)}
+    assert by_id["20261026-113005-1f3a"]["files"]["garment2"].endswith("garment2.jpg")
+    assert "garment2" not in by_id["20261026-113006-2f3b"]["files"]
+
+
 def test_records_are_owner_only_under_a_zero_umask(root, daemon_umask):
     """一条记录一个目录，里面是用户上传的人脸原图 —— 不该让同机其他账号读走。"""
     rid = "20261030-113005-1f3a"
-    save_record(root, rid, PERSON, GARMENT, RESULT, META)
+    save_record(root, rid, PERSON, [GARMENT], RESULT, META)
     assert root.stat().st_mode & 0o077 == 0, f"records 根目录 {oct(root.stat().st_mode & 0o777)}"
     d = root / rid
     assert d.stat().st_mode & 0o077 == 0, f"记录目录 {oct(d.stat().st_mode & 0o777)}"
@@ -53,16 +63,16 @@ def test_records_are_owner_only_under_a_zero_umask(root, daemon_umask):
 
 def test_saved_files_are_readable(root):
     rid = "20261026-113005-1f3a"
-    save_record(root, rid, PERSON, GARMENT, RESULT, META)
+    save_record(root, rid, PERSON, [GARMENT], RESULT, META)
     for name in ("person.jpg", "garment.jpg", "result.png", "thumb.jpg"):
         assert (root / rid / name).stat().st_size > 0
     assert Image.open(root / rid / "result.png").size == (896, 1152)
 
 
 def test_list_newest_first(root):
-    save_record(root, "20261026-090000-aaaa", PERSON, GARMENT, RESULT, META)
-    save_record(root, "20261026-120000-bbbb", PERSON, GARMENT, RESULT, META)
-    save_record(root, "20261026-103000-cccc", PERSON, GARMENT, RESULT, META)
+    save_record(root, "20261026-090000-aaaa", PERSON, [GARMENT], RESULT, META)
+    save_record(root, "20261026-120000-bbbb", PERSON, [GARMENT], RESULT, META)
+    save_record(root, "20261026-103000-cccc", PERSON, [GARMENT], RESULT, META)
     assert [r["id"] for r in list_records(root)] == [
         "20261026-120000-bbbb",
         "20261026-103000-cccc",
@@ -72,13 +82,13 @@ def test_list_newest_first(root):
 
 def test_broken_record_is_skipped_not_fatal(root):
     (root / "20261026-110000-bad0").mkdir(parents=True)  # 空目录，没 meta.json
-    save_record(root, "20261026-120000-900d", PERSON, GARMENT, RESULT, META)
+    save_record(root, "20261026-120000-900d", PERSON, [GARMENT], RESULT, META)
     assert [r["id"] for r in list_records(root)] == ["20261026-120000-900d"]
 
 
 def test_record_missing_one_image_is_skipped(root):
     rid = "20261026-120000-5a1f"
-    save_record(root, rid, PERSON, GARMENT, RESULT, META)
+    save_record(root, rid, PERSON, [GARMENT], RESULT, META)
     (root / rid / "thumb.jpg").unlink()
     assert list_records(root) == []
 
@@ -89,7 +99,7 @@ def test_list_on_missing_root_is_empty(root):
 
 def test_delete_removes_whole_dir(root):
     rid = "20261026-113005-1f3a"
-    save_record(root, rid, PERSON, GARMENT, RESULT, META)
+    save_record(root, rid, PERSON, [GARMENT], RESULT, META)
     assert delete_record(root, rid) is True
     assert not (root / rid).exists()
 
@@ -107,7 +117,7 @@ def test_delete_rejects_path_that_is_not_a_record_id(root):
 
 def test_record_deleted_mid_read_is_skipped_not_fatal(root, monkeypatch):
     """图库轮询撞上并发删除：meta.json 刚检查完整就被删掉，不该让整个列表炸。"""
-    save_record(root, "20261026-113005-1f3a", PERSON, GARMENT, RESULT, META)
+    save_record(root, "20261026-113005-1f3a", PERSON, [GARMENT], RESULT, META)
     real = pathlib.Path.read_text
 
     def gone(self, *args, **kwargs):
@@ -123,7 +133,7 @@ def test_result_is_kept_under_its_real_format(root):
     """接口哪天改吐 JPEG 时，不该还把它叫 result.png、按 image/png 发出去。"""
     rid = "20261026-113005-1f3a"
     jpeg_result = img_bytes(896, 1152, (9, 9, 9), fmt="JPEG")
-    files = save_record(root, rid, PERSON, GARMENT, jpeg_result, META)
+    files = save_record(root, rid, PERSON, [GARMENT], jpeg_result, META)
 
     assert (root / rid / "result.jpg").is_file()
     assert not (root / rid / "result.png").exists()

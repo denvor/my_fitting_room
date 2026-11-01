@@ -22,7 +22,7 @@ from tryon.prefs import (
     load_prefs,
     save_prefs,
 )
-from tryon.prompt import TRYON_PROMPT
+from tryon.prompt import REF_FIELDS, REF_SLOTS, SLOT_LABELS, VALID_MODES, prompt_for
 from tryon.quota import CREDITS_PER_1K, QuotaUnavailable, credits_for, read_quota
 from tryon.qwen_api import ApiError, ResultFetchFailed, ResultMissing, generate
 from tryon.records import (
@@ -35,7 +35,8 @@ from tryon.records import (
 )
 from tryon.settings import Settings
 
-MAX_BODY_BYTES = 25 * 1024 * 1024  # 两张 10MB 原图加 multipart 余量
+# 套装那次是三张图（人像 + 上衣 + 裤子），每张接口上限 10MB：按三张留，不然 413 会把套装请求掐死
+MAX_BODY_BYTES = 36 * 1024 * 1024
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 
 
@@ -51,8 +52,7 @@ def _busy(lock_path: Path):
     return None if held is None else {"age_s": held.age_s(), "source": held.source, "pid": held.pid}
 
 
-def _upload_bytes(field: str) -> bytes:
-    label = "人像" if field == "person" else "衣服"
+def _upload_bytes(field: str, label: str) -> bytes:
     f = request.files.get(field)
     if f is None or not f.filename:
         raise ImageRejected(f"没有收到{label}图片")
@@ -92,7 +92,7 @@ def create_app(
 
     @app.errorhandler(413)
     def too_large(_error):
-        return _fail("image", "两张图加起来超过 25MB，请压缩后再传", 413)
+        return _fail("image", "图片加起来超过 36MB，请压缩后再传", 413)
 
     @app.get("/")
     def index():
@@ -227,23 +227,40 @@ def create_app(
     def api_tryon():
         # 每个请求现读一次：设置页改完立刻生效，不用重启。档位得先知道，因为它决定输入上限
         prefs = load_prefs(prefs_path, prefs_defaults)
+        # 分类先于一切：它决定要几个槽位、发哪条指令，而这两件事都没法从图上猜出来
+        mode = request.form.get("mode") or "single"
+        if mode not in VALID_MODES:
+            return _fail("mode", f"没有这个分类：{mode}。可选的是 {'、'.join(VALID_MODES)}。", 400)
+        slots = REF_SLOTS[mode]
+        extra = request.files.get(REF_FIELDS[1]) if slots == 1 else None
+        if extra and extra.filename:
+            return _fail(
+                "mode",
+                f"{mode} 这个分类只收一张参考图（{SLOT_LABELS[mode][0]}），多出来的一张不会偷偷丢掉 —— "
+                "想一次穿上衣和裤子请切到「上衣+裤子」。",
+                400,
+            )
         if not try_acquire(lock_path, prefs.source):
             return _fail("busy", "上一次还在跑，请等它结束", 409)
         try:
             try:
-                person = prepare_upload(_upload_bytes("person"), prefs.size)
-                garment = prepare_upload(_upload_bytes("garment"), prefs.size)
+                person = prepare_upload(_upload_bytes("person", "人像"), prefs.size)
+                refs = [
+                    prepare_upload(_upload_bytes(field, label), prefs.size)
+                    for field, label in zip(REF_FIELDS[:slots], SLOT_LABELS[mode])
+                ]
             except ImageRejected as e:
                 return _fail("image", str(e), 400)
+            prompt = prompt_for(mode)
 
             started = time.monotonic()
             local = prefs.source == "comfyui"
             try:
                 g = (
-                    comfy_generate_fn(prefs.comfy_url, person, garment, size=prefs.size)
+                    comfy_generate_fn(prefs.comfy_url, person, refs, prompt, size=prefs.size)
                     if local
                     # 档位并进 settings 再交给接口那条路：generate 的签名不动，请求体里的尺寸读 settings.size
-                    else generate_fn(replace(settings, size=prefs.size), person, garment)
+                    else generate_fn(replace(settings, size=prefs.size), person, refs, prompt)
                 )
             except comfy_api.ComfyUnavailable as e:
                 return _fail("comfy", f"{e} 设置页里可以改地址，或者把来源切回 API。", 502)
@@ -279,7 +296,8 @@ def create_app(
             meta = {
                 "created_at": datetime.now().isoformat(timespec="seconds"),
                 "elapsed_s": elapsed,
-                "prompt": TRYON_PROMPT,
+                "mode": mode,
+                "prompt": prompt,
                 # 两条来源都记真正回来的那张，不记"我们请求的那档"：2026-10-31 实测接口会无视
                 # 请求里更小的尺寸（要 496*616，回传 896×1152），记想要的会让 meta.json 说谎
                 "size": f"{g.width}*{g.height}",
@@ -290,7 +308,7 @@ def create_app(
                 "rewrite_status": g.rewrite_status,
             }
             try:
-                files = save_record(root_path, rid, person.data, garment.data, g.image, meta)
+                files = save_record(root_path, rid, person.data, [r.data for r in refs], g.image, meta)
             except OSError as e:  # 图已经拿到、额度已经花掉，落盘失败不能变成 500 HTML
                 return _fail("result", f"结果图已生成，但写入本地失败：{e}。这次生成已经花掉额度，图库里不会有这条记录。", 502)
             return jsonify(

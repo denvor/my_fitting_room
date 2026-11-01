@@ -14,7 +14,7 @@ from tryon.comfy_api import (
     generate,
 )
 from tryon.image_prep import OUT_MAX_AREA, PreparedImage
-from tryon.prompt import TRYON_PROMPT
+from tryon.prompt import OUTFIT_PROMPT, TRYON_PROMPT
 
 UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"
 CLIP = "qwen3vl_8b_int8_convrot.safetensors"
@@ -119,14 +119,35 @@ def test_resolution_never_exceeds_the_band():
 
 def test_reference_images_use_dotted_flat_keys():
     """唯一生效的形状；嵌套字典会被 ComfyUI 静默丢图（§6.3）。"""
-    g = build_graph("p.jpg", "g.jpg", TRYON_PROMPT, 0, 7, "tryon")
+    g = build_graph("p.jpg", ["g.jpg"], TRYON_PROMPT, 0, 7, "tryon")
     enc = node(g, "TextEncodeQwenImage21")["inputs"]
     assert enc["images.image_1"] == ["1", 0] and enc["images.image_2"] == ["2", 0]
     assert "images" not in enc
 
 
+def test_a_second_reference_image_gets_its_own_node_and_slot():
+    """上衣+裤子那次要多一个 LoadImage 节点和 images.image_3：少喂一张，模型就自己编一条裤子。"""
+    g = build_graph("p.jpg", ["top.jpg", "pants.jpg"], OUTFIT_PROMPT, 0, 7, "tryon")
+    load = sorted(n["inputs"]["image"] for n in g.values() if n["class_type"] == "LoadImage")
+    assert load == ["p.jpg", "pants.jpg", "top.jpg"]
+    enc = node(g, "TextEncodeQwenImage21")["inputs"]
+    assert enc["images.image_1"] == ["1", 0] and enc["images.image_2"] == ["2", 0]
+    assert enc["images.image_3"] == ["3", 0] and "images.image_4" not in enc
+    assert enc["prompt"] == OUTFIT_PROMPT
+
+
+def test_two_reference_images_are_uploaded_and_counted(wire):
+    """usage 里的 input_image_count 得跟着真张数走：写死 2 的话记录会说谎。"""
+    fake = wire(Fake(upload_names=["person.jpg", "garment.jpg", "garment2.jpg"], histories=[completed()]))
+    g = generate(URL, PERSON, [GARMENT, GARMENT], OUTFIT_PROMPT, timeout=60)
+    assert [c[2] for c in fake.calls if c[0] == "upload"] == ["person.jpg", "garment.jpg", "garment2.jpg"]
+    assert g.usage["input_image_count"] == 3
+    graph = fake.prompt_payloads[0]["prompt"]
+    assert graph["3"]["inputs"]["image"] == "garment2.jpg"
+
+
 def test_weight_file_names_match_the_verified_probe():
-    g = build_graph("p.jpg", "g.jpg", "x", 0, 1, "t")
+    g = build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t")
     assert node(g, "UNETLoader")["inputs"]["unet_name"] == UNET
     assert node(g, "CLIPLoader")["inputs"]["clip_name"] == CLIP
     assert node(g, "VAELoader")["inputs"]["vae_name"] == VAE
@@ -137,20 +158,20 @@ def test_weight_file_names_match_the_verified_probe():
 
 
 def test_sampler_uses_the_turbo_settings():
-    s = node(build_graph("p.jpg", "g.jpg", "x", 0, 42, "t"), "KSampler")["inputs"]
+    s = node(build_graph("p.jpg", ["g.jpg"], "x", 0, 42, "t"), "KSampler")["inputs"]
     assert (s["steps"], s["cfg"], s["sampler_name"], s["scheduler"], s["denoise"]) == (8, 1.0, "euler", "simple", 1.0)
     assert s["seed"] == 42
 
 
 def test_encode_and_decode_share_one_vae_node():
-    g = build_graph("p.jpg", "g.jpg", "x", 0, 1, "t")
+    g = build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t")
     enc, dec = node(g, "TextEncodeQwenImage21")["inputs"], node(g, "VAEDecode")["inputs"]
     vae_key = next(k for k, v in g.items() if v["class_type"] == "VAELoader")
     assert enc["vae"] == dec["vae"] == [vae_key, 0]
 
 
 def test_prompt_and_resolution_are_passed_through():
-    g = build_graph("p.jpg", "g.jpg", "把衣服穿上", 1472, 1, "pre")
+    g = build_graph("p.jpg", ["g.jpg"], "把衣服穿上", 1472, 1, "pre")
     enc, save = node(g, "TextEncodeQwenImage21")["inputs"], node(g, "SaveImage")["inputs"]
     assert enc["prompt"] == "把衣服穿上" and enc["resolution"] == 1472 and save["filename_prefix"] == "pre"
 
@@ -160,7 +181,7 @@ def test_prompt_and_resolution_are_passed_through():
 
 def test_one_round_trip_uploads_queues_polls_and_fetches(wire):
     fake = wire(Fake(histories=[{}, completed()]))
-    g = generate(URL, PERSON, GARMENT, timeout=60)
+    g = generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
 
     kinds = [c[0] for c in fake.calls]
     assert kinds == ["upload", "upload", "prompt", "get", "get", "view"]
@@ -174,7 +195,7 @@ def test_one_round_trip_uploads_queues_polls_and_fetches(wire):
 def test_uploaded_names_come_from_the_response_not_from_us(wire):
     """ComfyUI 可能回一个改过的名字（同名复用），图里必须用它给的那个。"""
     fake = wire(Fake(upload_names=["person (2).jpg", "garment (1).jpg"], histories=[completed()]))
-    generate(URL, PERSON, GARMENT, timeout=60)
+    generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
     assert [c[2] for c in fake.calls if c[0] == "upload"] == ["person.jpg", "garment.jpg"]
     graph = fake.prompt_payloads[0]["prompt"]
     assert graph["1"]["inputs"]["image"] == "person (2).jpg"
@@ -184,14 +205,14 @@ def test_uploaded_names_come_from_the_response_not_from_us(wire):
 def test_enqueue_rejection_carries_the_server_detail(wire):
     wire(Fake(prompt=ComfyRejected(URL, "value_not_in_list unet_name")))
     with pytest.raises(ComfyRejected) as e:
-        generate(URL, PERSON, GARMENT, timeout=60)
+        generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
     assert "value_not_in_list" in e.value.detail and e.value.url == URL
 
 
 def test_poll_timeout_reports_and_never_requeues(wire):
     fake = wire(Fake(histories=[{} for _ in range(50)]))
     with pytest.raises(ComfyTimeout) as e:
-        generate(URL, PERSON, GARMENT, timeout=3)
+        generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=3)
     assert [c for c in fake.calls if c[0] == "prompt"] == [("prompt", f"{URL}/prompt")]
     assert e.value.seconds >= 3 and fake.sleeps >= 3
 
@@ -205,7 +226,7 @@ def test_missing_image_output_is_reported(wire):
     }
     wire(Fake(histories=[done]))
     with pytest.raises(ComfyResultMissing):
-        generate(URL, PERSON, GARMENT, timeout=60)
+        generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
 
 
 def test_execution_error_reports_the_server_message_not_bare_missing(wire):
@@ -219,20 +240,20 @@ def test_execution_error_reports_the_server_message_not_bare_missing(wire):
     }
     wire(Fake(histories=[failed]))
     with pytest.raises(ComfyRejected) as e:
-        generate(URL, PERSON, GARMENT, timeout=60)
+        generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
     assert "CUDA out of memory" in e.value.detail
 
 
 def test_transport_failure_names_the_address(wire):
     wire(Fake(prompt=ComfyUnavailable(URL)))
     with pytest.raises(ComfyUnavailable) as e:
-        generate(URL, PERSON, GARMENT, timeout=60)
+        generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
     assert URL in str(e.value) and e.value.url == URL
 
 
 def test_view_query_carries_filename_subfolder_and_type(wire):
     fake = wire(Fake(histories=[completed(filename="a.png", subfolder="tryon")]))
-    generate(URL, PERSON, GARMENT, timeout=60)
+    generate(URL, PERSON, [GARMENT], TRYON_PROMPT, timeout=60)
     url = [c[1] for c in fake.calls if c[0] == "view"][0]
     assert "filename=a.png" in url and "subfolder=tryon" in url and "type=output" in url
 

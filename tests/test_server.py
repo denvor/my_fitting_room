@@ -36,7 +36,7 @@ USAGE = {
 }
 
 
-def ok_generation(settings, person, garment, timeout=300) -> Generation:
+def ok_generation(settings, person, refs, prompt, timeout=300) -> Generation:
     return Generation(
         image=RESULT_PNG, width=896, height=1152, usage=USAGE, request_id="r-1", rewrite_status="success"
     )
@@ -46,26 +46,31 @@ def fake_quota() -> Quota:
     return Quota(total=25500, used=10756.767, times_1k=254, remaining_days=13)
 
 
-def fields(person=PERSON, garment=GARMENT):
+def fields(person=PERSON, garment=GARMENT, garment2=None, mode=None):
     data = {}
     if person is not None:
         data["person"] = (BytesIO(person), "p.jpg")
     if garment is not None:
         data["garment"] = (BytesIO(garment), "g.jpg")
+    if garment2 is not None:
+        data["garment2"] = (BytesIO(garment2), "g2.jpg")
+    if mode is not None:
+        data["mode"] = (None, mode)
     return data
 
 
 COMFY_URL = "http://127.0.0.1:8188"
 
 
-def ok_comfy_generation(comfy_url, person, garment, timeout=300, size="1k") -> Generation:
+def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k") -> Generation:
     return Generation(
-        image=RESULT_PNG, width=896, height=1152, usage={"input_image_count": 2, "resolution": 0},
+        image=RESULT_PNG, width=896, height=1152,
+        usage={"input_image_count": 1 + len(refs), "resolution": 0},
         request_id="pid-9", rewrite_status="", source="comfyui",
     )
 
 
-def boom_comfy(comfy_url, person, garment, timeout=300, size="1k"):
+def boom_comfy(comfy_url, person, refs, prompt, timeout=300, size="1k"):
     """没注入本地 fn 时不许静默走通，逼测试自己说清用的是哪条来源。"""
     raise ComfyUnavailable(comfy_url, "测试没有注入 comfy_generate_fn")
 
@@ -170,10 +175,10 @@ def test_tryon_oversized_body_returns_json_not_html(make):
 def test_busy_second_request_is_409(make):
     entered, release = threading.Event(), threading.Event()
 
-    def slow_generate(settings, person, garment, timeout=300):
+    def slow_generate(settings, person, refs, prompt, timeout=300):
         entered.set()
         release.wait(timeout=5)
-        return ok_generation(settings, person, garment)
+        return ok_generation(settings, person, refs, prompt)
 
     client, _root = make(generate_fn=slow_generate)
     results = []
@@ -190,7 +195,7 @@ def test_busy_second_request_is_409(make):
 
 
 def test_lock_released_after_failure(make):
-    def boom(settings, person, garment, timeout=300):
+    def boom(settings, person, refs, prompt, timeout=300):
         raise ApiError(code="Throttling", message="限流", request_id="r-8")
 
     client, _root = make(generate_fn=boom)
@@ -200,7 +205,7 @@ def test_lock_released_after_failure(make):
 
 
 def test_api_error_passes_through_code_and_request_id(make):
-    def fail(settings, person, garment, timeout=300):
+    def fail(settings, person, refs, prompt, timeout=300):
         raise ApiError(code="InvalidParameter", message="参数不对", request_id="r-9")
 
     client, root = make(generate_fn=fail)
@@ -214,7 +219,7 @@ def test_api_error_passes_through_code_and_request_id(make):
 
 
 def test_missing_result_image_reports_api_stage(make):
-    def no_image(settings, person, garment, timeout=300):
+    def no_image(settings, person, refs, prompt, timeout=300):
         raise ResultMissing(request_id="r-10")
 
     client, _root = make(generate_fn=no_image)
@@ -223,7 +228,7 @@ def test_missing_result_image_reports_api_stage(make):
 
 
 def test_result_fetch_failure_reports_url(make):
-    def fetch_failed(settings, person, garment, timeout=300):
+    def fetch_failed(settings, person, refs, prompt, timeout=300):
         raise ResultFetchFailed(url="https://oss.test/a.png", reason="连接被重置")
 
     client, _root = make(generate_fn=fetch_failed)
@@ -236,7 +241,7 @@ def test_result_fetch_failure_reports_url(make):
 
 
 def test_unexpected_error_is_reported_not_raised(make):
-    def crash(settings, person, garment, timeout=300):
+    def crash(settings, person, refs, prompt, timeout=300):
         raise OSError("网卡掉了")
 
     client, _root = make(generate_fn=crash)
@@ -316,7 +321,7 @@ def test_record_save_failure_degrades_to_readable_error(make, tmp_path, monkeypa
     """图已经生成（额度已花），落盘失败时不能吐 500 HTML：前端会把"连不上本机服务"糊上去。"""
     from tryon import server
 
-    def boom(root, rid, person, garment, result, meta):
+    def boom(root, rid, person, refs, result, meta):
         raise OSError("设备上没有空间")
 
     monkeypatch.setattr(server, "save_record", boom)
@@ -334,7 +339,7 @@ def test_jpeg_result_is_served_with_real_name(make):
     """结果图换成 JPEG 字节时，落盘名与 /files 白名单要一起跟上。"""
     from tryon.qwen_api import Generation as G
 
-    def gen_jpeg(settings, person, garment, timeout=300):
+    def gen_jpeg(settings, person, refs, prompt, timeout=300):
         return G(image=img_bytes(896, 1152, (5, 6, 7), fmt="JPEG"), width=896, height=1152,
                  usage=USAGE, request_id="r-j", rewrite_status="success")
 

@@ -7,7 +7,6 @@ import urllib.request
 from dataclasses import dataclass
 
 from tryon.image_prep import PreparedImage, api_size
-from tryon.prompt import TRYON_PROMPT
 from tryon.settings import Settings
 
 DOWNLOAD_TIMEOUT = 120
@@ -76,8 +75,11 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def build_request(person: PreparedImage, garment: PreparedImage, size: str, model: str) -> dict:
-    """图像1=人像、图像2=衣服、最后一条文本，接口按位置引用。"""
+def build_request(person: PreparedImage, refs: list[PreparedImage], size: str, model: str, prompt: str) -> dict:
+    """图像1=人像、图像2 起是参考图、最后一条文本，接口按**数组位置**引用图号。
+
+    顺序就是指令里的"图像N"，所以加分类只能往参考图后面加，不能插到人像前面。
+    """
     return {
         "model": model,
         "input": {
@@ -86,8 +88,8 @@ def build_request(person: PreparedImage, garment: PreparedImage, size: str, mode
                     "role": "user",
                     "content": [
                         {"image": person.data_uri},
-                        {"image": garment.data_uri},
-                        {"text": TRYON_PROMPT},
+                        *[{"image": ref.data_uri} for ref in refs],
+                        {"text": prompt},
                     ],
                 }
             ]
@@ -111,11 +113,12 @@ def download_image(url: str, attempts: int = 3, timeout: int = DOWNLOAD_TIMEOUT)
 def generate(
     settings: Settings,
     person: PreparedImage,
-    garment: PreparedImage,
+    refs: list[PreparedImage],
+    prompt: str,
     timeout: int = GENERATION_TIMEOUT,
 ) -> Generation:
     size = api_size(person.width, person.height, settings.size)
-    body = build_request(person, garment, size, settings.model)
+    body = build_request(person, refs, size, settings.model, prompt)
     status, raw = _post(settings.endpoint, body, settings.api_key, timeout)
 
     try:

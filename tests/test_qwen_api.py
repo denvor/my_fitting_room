@@ -4,7 +4,7 @@ import pytest
 
 from tryon import qwen_api
 from tryon.image_prep import OUT_MAX_AREA, PreparedImage
-from tryon.prompt import TRYON_PROMPT
+from tryon.prompt import OUTFIT_PROMPT, TRYON_PROMPT
 from tryon.qwen_api import (
     ApiError,
     ResultFetchFailed,
@@ -62,7 +62,7 @@ def fake_post(responses, posted):
 
 
 def test_build_request_image_order_is_person_then_garment_then_text():
-    body = build_request(PERSON, GARMENT, "896*1152", "qwen-image-3.0-pro")
+    body = build_request(PERSON, [GARMENT], "896*1152", "qwen-image-3.0-pro", TRYON_PROMPT)
     content = body["input"]["messages"][0]["content"]
     assert [k for item in content for k in item] == ["image", "image", "text"]
     assert content[0]["image"] == PERSON.data_uri
@@ -72,12 +72,25 @@ def test_build_request_image_order_is_person_then_garment_then_text():
     assert body["model"] == "qwen-image-3.0-pro"
 
 
+def test_every_reference_image_goes_in_after_the_person():
+    """上衣+裤子那次是三张输入图：位置就是指令里的图像1/2/3，人像必须排第一，文本永远在最后。"""
+    pants = PreparedImage(data=b"pants", width=896, height=1152, data_uri="data:image/jpeg;base64,cGFudHM=")
+    body = build_request(PERSON, [GARMENT, pants], "896*1152", "qwen-image-3.0-pro", OUTFIT_PROMPT)
+    content = body["input"]["messages"][0]["content"]
+    assert [item.get("image") or item.get("text") for item in content] == [
+        PERSON.data_uri,
+        GARMENT.data_uri,
+        pants.data_uri,
+        OUTFIT_PROMPT,
+    ]
+
+
 def test_generate_returns_image_and_usage(monkeypatch):
     posted, fetched = [], []
     monkeypatch.setattr(qwen_api, "_post", fake_post([(200, ok_response())], posted))
     monkeypatch.setattr(qwen_api, "_get", lambda url, timeout: fetched.append(url) or b"fakepng")
 
-    g = generate(SETTINGS, PERSON, GARMENT)
+    g = generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
     assert g.image == b"fakepng"
     assert g.usage["output_image_count"] == 1 and g.usage["input_image_type"] == "qima_input_1k"
@@ -101,7 +114,7 @@ def test_generate_raises_apierror_with_server_message(monkeypatch):
     monkeypatch.setattr(qwen_api, "_post", fake_post([(400, error)], []))
 
     with pytest.raises(ApiError) as e:
-        generate(SETTINGS, PERSON, GARMENT)
+        generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
     assert e.value.code == "InvalidParameter"
     assert e.value.message == "Failed to download image URL after retries."
@@ -114,7 +127,7 @@ def test_generate_raises_apierror_when_200_carries_code(monkeypatch):
     monkeypatch.setattr(qwen_api, "_post", fake_post([(200, ok)], []))
 
     with pytest.raises(ApiError) as e:
-        generate(SETTINGS, PERSON, GARMENT)
+        generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
     assert e.value.code == "Throttling"
 
@@ -125,14 +138,14 @@ def test_generate_handles_200_without_image(monkeypatch):
     monkeypatch.setattr(qwen_api, "_post", fake_post([(200, empty)], []))
 
     with pytest.raises(ResultMissing):
-        generate(SETTINGS, PERSON, GARMENT)
+        generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
 
 def test_generate_handles_unparseable_body(monkeypatch):
     monkeypatch.setattr(qwen_api, "_post", lambda url, body, api_key, timeout: (500, b"<html>boom</html>"))
 
     with pytest.raises(ApiError) as e:
-        generate(SETTINGS, PERSON, GARMENT)
+        generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
     assert "500" in e.value.code
 
@@ -160,6 +173,6 @@ def test_generate_waits_long_enough_for_the_slow_tail(monkeypatch):
     monkeypatch.setattr(qwen_api, "_post", fake_post([(200, ok_response())], posted))
     monkeypatch.setattr(qwen_api, "_get", lambda url, timeout: b"fakepng")
 
-    generate(SETTINGS, PERSON, GARMENT)
+    generate(SETTINGS, PERSON, [GARMENT], TRYON_PROMPT)
 
     assert posted[0]["timeout"] == 600

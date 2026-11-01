@@ -14,7 +14,7 @@ from math import isqrt
 from PIL import Image
 
 from tryon.image_prep import PreparedImage, out_area
-from tryon.prompt import TRYON_PROMPT
+from tryon.prompt import REF_FILENAMES
 from tryon.qwen_api import Generation
 
 # 探针实测出图成立的那三个权重文件名（§6.2），写错会在入队阶段就被拒，所以自检要对着枚举校验
@@ -105,38 +105,41 @@ def comfy_resolution(width: int, height: int, size: str = "1k") -> int:
     return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
 
 
-def build_graph(person_name: str, garment_name: str, prompt: str, resolution: int, seed: int, prefix: str) -> dict:
-    """10 个节点，逐字照抄规格 §6.2 那份实测成立的图。
+def build_graph(person_name: str, ref_names: list[str], prompt: str, resolution: int, seed: int, prefix: str) -> dict:
+    """人像占 1 号、参考图从 2 号起连排，模型链再往后接 —— 单参考图时逐字等于规格 §6.2 那份图。
 
     参考图必须写成 `images.image_1` 这种点号平铺的键：换成嵌套字典或数组，ComfyUI 不报错，
     只是把参考图丢掉，于是输出 1024 正方形、人和衣服全是凭空编的（§6.3）。
+    节点号只是号，但编码节点里那些 `["7", 0]` 引用是真的按号连的，所以整条链跟着参考图张数平移。
     """
-    return {
-        "1": {"class_type": "LoadImage", "inputs": {"image": person_name}},
-        "2": {"class_type": "LoadImage", "inputs": {"image": garment_name}},
-        "3": {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_NAME, "weight_dtype": "default"}},
-        "4": {"class_type": "QwenImage21Cache", "inputs": {"model": ["3", 0], "device": "auto", "dtype": "default"}},
-        "5": {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_NAME, "type": "qwen_image"}},
-        "6": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
-        "7": {
+    slots = 1 + len(ref_names)  # 人像 + 参考图，模型链从这之后开始编号
+    load = {str(i + 1): {"class_type": "LoadImage", "inputs": {"image": name}}
+            for i, name in enumerate([person_name, *ref_names])}
+    unet, cache, clip, vae, enc, samp, dec, save = (str(slots + k) for k in range(1, 9))
+    graph = {
+        **load,
+        unet: {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_NAME, "weight_dtype": "default"}},
+        cache: {"class_type": "QwenImage21Cache", "inputs": {"model": [unet, 0], "device": "auto", "dtype": "default"}},
+        clip: {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_NAME, "type": "qwen_image"}},
+        vae: {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
+        enc: {
             "class_type": "TextEncodeQwenImage21",
             "inputs": {
-                "clip": ["5", 0],
-                "vae": ["6", 0],
+                "clip": [clip, 0],
+                "vae": [vae, 0],
                 "prompt": prompt,
                 "negative_prompt": "",
                 "resolution": resolution,
-                "images.image_1": ["1", 0],
-                "images.image_2": ["2", 0],
+                **{f"images.image_{i + 1}": [str(i + 1), 0] for i in range(slots)},
             },
         },
-        "8": {
+        samp: {
             "class_type": "KSampler",
             "inputs": {
-                "model": ["4", 0],
-                "positive": ["7", 0],
-                "negative": ["7", 1],
-                "latent_image": ["7", 2],
+                "model": [cache, 0],
+                "positive": [enc, 0],
+                "negative": [enc, 1],
+                "latent_image": [enc, 2],
                 "seed": seed,
                 "steps": STEPS,
                 "cfg": CFG,
@@ -145,9 +148,10 @@ def build_graph(person_name: str, garment_name: str, prompt: str, resolution: in
                 "denoise": 1.0,
             },
         },
-        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["6", 0]}},
-        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": prefix}},
+        dec: {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae, 0]}},
+        save: {"class_type": "SaveImage", "inputs": {"images": [dec, 0], "filename_prefix": prefix}},
     }
+    return graph
 
 
 def _error_detail(entry: dict) -> str:
@@ -174,18 +178,20 @@ def _first_image(entry: dict) -> dict | None:
 def generate(
     comfy_url: str,
     person: PreparedImage,
-    garment: PreparedImage,
+    refs: list[PreparedImage],
+    prompt: str,
     timeout: int | None = None,
     size: str = "1k",
 ) -> Generation:
     url = comfy_url.rstrip("/")
     limit = timeout if timeout is not None else TIMEOUT_BY_SIZE[size]
     resolution = comfy_resolution(person.width, person.height, size)
-    person_name = _post_multipart(f"{url}/upload/image", "image", "person.jpg", person.data, HTTP_TIMEOUT)
-    garment_name = _post_multipart(f"{url}/upload/image", "image", "garment.jpg", garment.data, HTTP_TIMEOUT)
-    graph = build_graph(
-        person_name, garment_name, TRYON_PROMPT, resolution, random.randrange(1, 2**62), "tryon"
-    )
+    # 文件名只是 ComfyUI input 目录里给人看的那个名字，槽序由我们传的顺序决定
+    names = [
+        _post_multipart(f"{url}/upload/image", "image", filename, blob.data, HTTP_TIMEOUT)
+        for filename, blob in zip(("person.jpg", *REF_FILENAMES), [person, *refs])
+    ]
+    graph = build_graph(names[0], names[1:], prompt, resolution, random.randrange(1, 2**62), "tryon")
     prompt_id = str(_post_json(f"{url}/prompt", {"prompt": graph}, HTTP_TIMEOUT).get("prompt_id") or "")
     if not prompt_id:
         raise ComfyRejected(url, "入队没有返回 prompt_id")
@@ -221,7 +227,7 @@ def generate(
         width=width,
         height=height,
         usage={
-            "input_image_count": 2,
+            "input_image_count": 1 + len(refs),
             "output_image_count": 1,
             "output_width": width,
             "output_height": height,
