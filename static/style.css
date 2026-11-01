@@ -223,8 +223,11 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 }
 
 .pk-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
-.pk-head h2 { margin: 0; font: 600 1.25rem/1.3 var(--serif); letter-spacing: .03em; }
-.pk-head button { padding: .4rem .8rem; background: var(--surface); color: var(--ink-soft); font: .82rem/1 var(--mono); }
+.pk-head h2 { margin: 0; font: 600 1.25rem/1.3 var(--serif); letter-spacing: .03em; overflow-wrap: anywhere; }
+.pk-head button {
+  flex: 0 0 auto; white-space: nowrap; /* 窄屏上标题会把它挤成竖排两个字 */
+  padding: .4rem .8rem; background: var(--surface); color: var(--ink-soft); font: .82rem/1 var(--mono);
+}
 
 .pk-tabs { display: flex; flex-wrap: wrap; gap: .45rem; margin: 0 0 .8rem; }
 .pk-tabs button {
