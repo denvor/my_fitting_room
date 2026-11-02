@@ -72,6 +72,12 @@ GET  /view?filename=&subfolder=&type=output            → 图片字节
 | | `VAEDecode` | `samples←KSampler`, `vae←VAELoader` |
 | | `SaveImage` | `images←VAEDecode`, `filename_prefix` |
 
+> **2026-11-02 改了编码节点**：表里那行 `TextEncodeQwenImage21` 换成了仓库自带的 fork
+> `TextEncodeQwenImage21PosOnly`（`comfy_nodes/qwen21_posonly_encode.py`）—— 输入输出口同形，
+> 只是不编 `negative_prompt`（`cfg=1.0` 下那趟根本不进采样器）。节点号、`images.image_N` 的形状、
+> 三个输出口的序号**一个都没变**，所以下面那份 10-27 探针验出来的图照旧读；
+> 理由与实测见 `docs/comfyui-measurements.md` §9，装法见 README「装与起」。
+
 权重文件名要在启动时对 `/object_info` 里的枚举值做校验，写错文件名 ComfyUI 会在入队阶段就拒绝。
 
 **实测出图成立的那份图，原样如下**（`"1"`/`"2"` 是 `LoadImage` 的节点号，值填 `/upload/image` 回的名字；`seed` 每次随机）：
@@ -168,7 +174,7 @@ GET  /view?filename=&subfolder=&type=output            → 图片字节
 - **本地也用估算卷尺 + 真实秒数**。ComfyUI 确实广播 WS `"progress"`（这个版本源码里 13 处），能给出 8 步真百分比，但代价是多一个 websocket 客户端依赖 —— 使用者看到三个选项后明确选了"零新依赖"。所以本地不装真进度
 - **两条路用同一个 `ESTIMATE_MS` 思想但不同基数**：API 90 秒、本地 60 秒（本地实测点摊在 20–145 秒之间，30 秒被证伪后调上来的）。冷启动 95 秒时曲线会先到 90% 然后停住，但秒数是真的，和 API 那条路现在一样的处理方式
 - **确认框按来源换文案**：本地说"本地生成 · 不花额度 · 约 20–95 秒"，不说"还剩多少次"
-- **`/settings` 的"测一下能不能连上"检查三件事**：地址通不通、三个权重文件名在不在 `/object_info` 的枚举里、`TextEncodeQwenImage21` 这个节点在不在。第二项能挡住"工作流能开但一跑就错"
+- **`/settings` 的"测一下能不能连上"检查三件事**：地址通不通、三个权重文件名在不在 `/object_info` 的枚举里、`TextEncodeQwenImage21` 这个节点在不在。第二项能挡住"工作流能开但一跑就错"。2026-11-02 起多查一项：`comfy_nodes/` 那个自定义编码节点在不在（图里发的就是它），缺了要把"拷进 custom_nodes 再重启"说到人话
 - **本地路径的超时**：入队 + 轮询总时长上限 300 秒。本地超时无成本（不像 API 超时照样扣 58），所以到点就明确报错，不重试
 - **单任务锁继续覆盖两条路**，不分来源各开一锁
 - 设置文件读写失败（磁盘满、权限）不能让主页 500：读失败按默认值走，写失败返回可读错误

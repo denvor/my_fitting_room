@@ -232,6 +232,7 @@ def test_the_server_really_calls_the_real_comfy_client(make, monkeypatch):
     )
     assert r.status_code == 200, r.get_json()
     assert uploads == ["person.jpg", "garment.jpg", "garment2.jpg"]
-    enc = next(n["inputs"] for n in graphs[0]["prompt"].values() if n["class_type"] == "TextEncodeQwenImage21")
+    enc = next(n["inputs"] for n in graphs[0]["prompt"].values()
+               if n["class_type"] == "TextEncodeQwenImage21PosOnly")
     assert enc["prompt"] == OUTFIT_PROMPT
     assert [k for k in enc if k.startswith("images.")] == ["images.image_1", "images.image_2", "images.image_3"]

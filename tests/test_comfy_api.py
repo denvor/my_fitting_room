@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -20,6 +21,7 @@ UNET = "qwen_image_2.1_turbo_int8_convrot.safetensors"
 CLIP = "qwen3vl_8b_int8_convrot.safetensors"
 VAE = "qwen_image_2.1_vae_bf16.safetensors"
 URL = "http://127.0.0.1:8188"
+ENCODER = "TextEncodeQwenImage21PosOnly"  # 图里实际发出去的那个，见 comfy_nodes/
 
 PERSON = PreparedImage(data=b"person-jpeg", width=896, height=1152, data_uri="data:image/jpeg;base64,cA==")
 GARMENT = PreparedImage(data=b"garment-jpeg", width=896, height=1152, data_uri="data:image/jpeg;base64,Zw==")
@@ -120,7 +122,7 @@ def test_resolution_never_exceeds_the_band():
 def test_reference_images_use_dotted_flat_keys():
     """唯一生效的形状；嵌套字典会被 ComfyUI 静默丢图（§6.3）。"""
     g = build_graph("p.jpg", ["g.jpg"], TRYON_PROMPT, 0, 7, "tryon")
-    enc = node(g, "TextEncodeQwenImage21")["inputs"]
+    enc = node(g, ENCODER)["inputs"]
     assert enc["images.image_1"] == ["1", 0] and enc["images.image_2"] == ["2", 0]
     assert "images" not in enc
 
@@ -130,7 +132,7 @@ def test_a_second_reference_image_gets_its_own_node_and_slot():
     g = build_graph("p.jpg", ["top.jpg", "pants.jpg"], OUTFIT_PROMPT, 0, 7, "tryon")
     load = sorted(n["inputs"]["image"] for n in g.values() if n["class_type"] == "LoadImage")
     assert load == ["p.jpg", "pants.jpg", "top.jpg"]
-    enc = node(g, "TextEncodeQwenImage21")["inputs"]
+    enc = node(g, ENCODER)["inputs"]
     assert enc["images.image_1"] == ["1", 0] and enc["images.image_2"] == ["2", 0]
     assert enc["images.image_3"] == ["3", 0] and "images.image_4" not in enc
     assert enc["prompt"] == OUTFIT_PROMPT
@@ -153,7 +155,7 @@ def test_weight_file_names_match_the_verified_probe():
     assert node(g, "VAELoader")["inputs"]["vae_name"] == VAE
     assert {n["class_type"] for n in g.values()} >= {
         "LoadImage", "UNETLoader", "QwenImage21Cache", "CLIPLoader", "VAELoader",
-        "TextEncodeQwenImage21", "KSampler", "VAEDecode", "SaveImage",
+        ENCODER, "KSampler", "VAEDecode", "SaveImage",
     }
 
 
@@ -163,16 +165,36 @@ def test_sampler_uses_the_turbo_settings():
     assert s["seed"] == 42
 
 
+def test_encoder_skips_the_negative_pass_and_keeps_the_wiring():
+    """官方节点那趟负向编码在 cfg=1.0 下根本不进采样器（comfy/samplers.py:609），1K 白烧 44 秒。
+    换成只编正向的 fork：三个输出口不变，KSampler 仍接 [enc, 0/1/2]，只是 1 号给的是正向的别名。
+    同 seed 出图逐位相同（docs/comfyui-measurements.md §9），所以除了这一行 class_type，图之外什么都不用动。"""
+    g = build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t")
+    kinds = {n["class_type"] for n in g.values()}
+    assert ENCODER in kinds and "TextEncodeQwenImage21" not in kinds
+    enc_id = next(k for k, v in g.items() if v["class_type"] == ENCODER)
+    s = node(g, "KSampler")["inputs"]
+    assert s["positive"] == [enc_id, 0] and s["negative"] == [enc_id, 1] and s["latent_image"] == [enc_id, 2]
+    assert s["cfg"] == 1.0  # 这个 fork 的全部前提：cfg 不是 1.0，那个"负向"就是正向的别名
+
+
+def test_shipped_node_file_declares_the_class_the_graph_sends():
+    """节点 id 写在 `comfy_nodes/` 那个文件里，class_type 写在 `comfy_api` 里 —— 两处改名是两次事故：
+    对不上时 `/object_info` 查得到官方节点、查不到我们那个，设置页红，但没人会想到是自己改错了字。"""
+    src = (Path(__file__).resolve().parent.parent / "comfy_nodes" / "qwen21_posonly_encode.py").read_text()
+    assert f'node_id="{comfy_api.ENCODER_CLASS}"' in src
+
+
 def test_encode_and_decode_share_one_vae_node():
     g = build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t")
-    enc, dec = node(g, "TextEncodeQwenImage21")["inputs"], node(g, "VAEDecode")["inputs"]
+    enc, dec = node(g, ENCODER)["inputs"], node(g, "VAEDecode")["inputs"]
     vae_key = next(k for k, v in g.items() if v["class_type"] == "VAELoader")
     assert enc["vae"] == dec["vae"] == [vae_key, 0]
 
 
 def test_prompt_and_resolution_are_passed_through():
     g = build_graph("p.jpg", ["g.jpg"], "把衣服穿上", 1472, 1, "pre")
-    enc, save = node(g, "TextEncodeQwenImage21")["inputs"], node(g, "SaveImage")["inputs"]
+    enc, save = node(g, ENCODER)["inputs"], node(g, "SaveImage")["inputs"]
     assert enc["prompt"] == "把衣服穿上" and enc["resolution"] == 1472 and save["filename_prefix"] == "pre"
 
 
@@ -285,6 +307,7 @@ def enum_info(cls, widget, names):
 GOOD = {
     "/system_stats": {"system": {"comfyui_version": "0.39.0"}},
     "/object_info/TextEncodeQwenImage21": {"TextEncodeQwenImage21": {"input": {"required": {}}}},
+    f"/object_info/{ENCODER}": {ENCODER: {"input": {"required": {}}}},
     "/object_info/UNETLoader": enum_info("UNETLoader", "unet_name", [UNET, "other.safetensors"]),
     "/object_info/CLIPLoader": enum_info("CLIPLoader", "clip_name", [CLIP]),
     "/object_info/VAELoader": enum_info("VAELoader", "vae_name", [VAE]),
@@ -321,6 +344,15 @@ def test_check_reports_missing_text_encode_node(serve):
     serve({**GOOD, "/object_info/TextEncodeQwenImage21": {}})
     result = comfy_api.check(URL)
     assert not result.ok and "TextEncodeQwenImage21" in result.problems[0]
+
+
+def test_check_reports_the_missing_custom_encoder(serve):
+    """图里发的就是这个节点，没装它生成会在入队阶段被拒 —— 自检得提前点名，还说清文件拷哪儿、要不要重启。
+    缺节点时 `/object_info/<id>` 实测吐 `{}`（在没装的 8188 上看过），照那个形状替。"""
+    serve({**GOOD, f"/object_info/{ENCODER}": {}})
+    result = comfy_api.check(URL)
+    assert not result.ok and ENCODER in result.problems[0]
+    assert "custom_nodes" in result.problems[0] and "重启" in result.problems[0]
 
 
 def test_check_names_the_weight_that_is_missing(serve):

@@ -23,6 +23,12 @@ CLIP_NAME = "qwen3vl_8b_int8_convrot.safetensors"
 VAE_NAME = "qwen_image_2.1_vae_bf16.safetensors"
 STEPS = 8
 CFG = 1.0
+# 编码节点用我们自己那个 fork（源码 `comfy_nodes/qwen21_posonly_encode.py`，装法见 README「装与起」）。
+# 官方 `TextEncodeQwenImage21` 会把负向也编一遍，而 cfg=1.0 时那趟根本不进采样器（comfy/samplers.py:609）：
+# 1K 白烧 44 秒、720p 白烧 22 秒，同 seed 出图逐位相同（`docs/comfyui-measurements.md` §9）。
+# 这个 fork **只在 cfg=1.0 下与官方等价**（它返回的"负向"是正向的别名），
+# 所以 test_encoder_skips_the_negative_pass_and_keeps_the_wiring 里特意把那颗 cfg 钉在这条依赖旁边。
+ENCODER_CLASS = "TextEncodeQwenImage21PosOnly"
 
 HTTP_TIMEOUT = 30
 VIEW_TIMEOUT = 60
@@ -38,7 +44,7 @@ TIMEOUT_BY_SIZE = {
     "2k": GENERATION_TIMEOUT_2K,
 }
 CHECK_TIMEOUT = 10
-# 首页加载要等它，所以只打一个接口、几秒就下结论：`check()` 那套是 4 个请求 × 10 秒，放这儿能把首屏拖死
+# 首页加载要等它，所以只打一个接口、几秒就下结论：`check()` 那套是 6 个请求 × 10 秒（11-02 起多一个节点），放这儿能把首屏拖死
 HEALTH_TIMEOUT = 3
 
 # 自检要对着 /object_info 的枚举校验这三项：文件名写错时 ComfyUI 在入队阶段就拒绝，
@@ -123,7 +129,7 @@ def build_graph(person_name: str, ref_names: list[str], prompt: str, resolution:
         clip: {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_NAME, "type": "qwen_image"}},
         vae: {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
         enc: {
-            "class_type": "TextEncodeQwenImage21",
+            "class_type": ENCODER_CLASS,
             "inputs": {
                 "clip": [clip, 0],
                 "vae": [vae, 0],
@@ -260,12 +266,18 @@ def healthy(comfy_url: str) -> bool:
 
 
 def check(comfy_url: str) -> CheckResult:
-    """设置页那颗按钮：能不能连上、有没有这个节点、权重名对不对，三种坏法分开说。"""
+    """设置页那颗按钮：能不能连上、节点在不在、权重名对不对，几种坏法分开说。"""
     url = comfy_url.rstrip("/")
     try:
         _get_json(f"{url}/system_stats", CHECK_TIMEOUT)
+        # 官方那个编码节点图里已经不用了，留这一条是当"ComfyUI 版本够新"的代理：
+        # 它随 2.1 的工作流一起进核心，缺它基本意味着这台跑不了这套图（`QwenImage21Cache` 也一起缺）
         if not _get_json(f"{url}/object_info/TextEncodeQwenImage21", CHECK_TIMEOUT):
             return CheckResult(False, (f"{url} 这台 ComfyUI 没有 TextEncodeQwenImage21 节点，版本或装法不对",))
+        if not _get_json(f"{url}/object_info/{ENCODER_CLASS}", CHECK_TIMEOUT):
+            return CheckResult(False, (
+                f"{url} 这台 ComfyUI 没装 {ENCODER_CLASS}：把仓库里的 comfy_nodes/qwen21_posonly_encode.py "
+                "拷进 ComfyUI 的 custom_nodes 目录，再重启 ComfyUI 才生效（图里发的就是它）",))
         problems = []
         for cls, (widget, want) in WEIGHTS.items():
             options = _enum_options(_get_json(f"{url}/object_info/{cls}", CHECK_TIMEOUT), cls, widget)
