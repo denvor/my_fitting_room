@@ -98,7 +98,7 @@ def make(tmp_path, prefs_text=None, quota_fn=None):
         prefs_file=prefs_file,
         secret_file=tmp_path / "secret.key",
         comfy_generate_fn=rec.comfy,
-        comfy_check_fn=lambda url: None,
+        comfy_check_fn=lambda url, source="comfyui": None,
         quota_fn=quota_fn or rec.quota,
     )
     # 锁住在 records 的上一层，和 settings.json、secret.key 同一个 data 目录

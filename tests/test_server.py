@@ -1,6 +1,7 @@
 import json
 import threading
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from PIL import Image
@@ -11,6 +12,7 @@ from tryon.qwen_api import ApiError, Generation, ResultFetchFailed, ResultMissin
 from tryon.quota import Quota, QuotaUnavailable
 from tryon.records import RECORD_ID_RE, new_record_id
 from tryon.server import STATIC_DIR, create_app
+from tryon.prefs import Prefs
 from tryon.settings import Settings
 
 SETTINGS = Settings(endpoint="https://example.test/generation", api_key="test-key", model="qwen-image-3.0-pro")
@@ -60,9 +62,21 @@ def fields(person=PERSON, garment=GARMENT, garment2=None, mode=None):
 
 
 COMFY_URL = "http://127.0.0.1:8188"
+GATE_REL = Path("tools") / "llama_gate" / "bin" / "dump_hidden"   # 第 3 档的"装好了"就看这个在不在
 
 
-def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k") -> Generation:
+def llama_settings(root, *, built: bool) -> Settings:
+    """把第 3 档的两条部署路径指到 tmp：不让测试结果跟着开发者自己编没编二进制变。"""
+    from dataclasses import replace
+
+    if built:
+        (root / GATE_REL).parent.mkdir(parents=True, exist_ok=True)
+        (root / GATE_REL).write_bytes(b"\x7fELF")
+    return replace(Settings(endpoint="https://example.test/generation", api_key="k", model="m"),
+                   llama_repo_root=str(root), llama_work_dir=str(root / "gate-work"))
+
+
+def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k", **_ignored) -> Generation:
     return Generation(
         image=RESULT_PNG, width=896, height=1152,
         usage={"input_image_count": 1 + len(refs), "resolution": 0},
@@ -70,7 +84,7 @@ def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k")
     )
 
 
-def boom_comfy(comfy_url, person, refs, prompt, timeout=300, size="1k"):
+def boom_comfy(comfy_url, person, refs, prompt, timeout=300, size="1k", **_ignored):
     """没注入本地 fn 时不许静默走通，逼测试自己说清用的是哪条来源。"""
     raise ComfyUnavailable(comfy_url, "测试没有注入 comfy_generate_fn")
 
@@ -93,20 +107,21 @@ class Counter:
         return self.fn(*args, **kwargs)
 
 
-def ok_check(comfy_url) -> CheckResult:
+def ok_check(comfy_url, source="comfyui") -> CheckResult:
     return CheckResult(True, ())
 
 
 @pytest.fixture
 def make(tmp_path):
-    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None, saved_prefs="api", size=None):
+    def _make(generate_fn=ok_generation, quota_fn=fake_quota, comfy_fn=None, check_fn=None, saved_prefs="api",
+              size=None, settings=None):
         root = tmp_path / "records"
         # 默认来源现在是不花钱的那条，所以走 API 的用例要显式存过 api；
         # saved_prefs=None 才是"从没存过"的初始状态
         if saved_prefs:
             write_prefs(root, source=saved_prefs, size=size)
         app = create_app(
-            SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
+            settings or SETTINGS, generate_fn=generate_fn, root=root, quota_fn=quota_fn,
             comfy_generate_fn=comfy_fn or boom_comfy, comfy_check_fn=check_fn or ok_check,
             prefs_file=root.parent / "settings.json",
         )
@@ -508,14 +523,78 @@ def test_unexpected_local_error_does_not_claim_credit_loss(make):
 # --- 设置接口（Task 6）---
 
 
-def test_settings_endpoint_returns_defaults(make):
-    client, _ = make(saved_prefs=None)
-
+def test_settings_endpoint_returns_defaults(make, tmp_path):
+    client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, built=False))
     body = client.get("/api/settings").get_json()
 
     assert body["ok"] is True and body["source"] == "comfyui"
     assert body["comfy_url"] == body["default_comfy_url"] == "http://127.0.0.1:8188"
-    assert body["valid_sources"] == ["api", "comfyui"]
+    assert body["valid_sources"] == ["api", "comfyui", "comfyui_llama"]
+    assert body["llama_ready"] is False  # 这台没编取数程序：第 3 档的状态由服务端报，不让页面猜
+
+
+def test_第三档在编好取数程序的机器上可选可存(make, tmp_path):
+    client, _ = make(settings=llama_settings(tmp_path, built=True), saved_prefs=None)
+
+    body = client.get("/api/settings").get_json()
+    assert body["valid_sources"] == ["api", "comfyui", "comfyui_llama"] and body["llama_ready"] is True
+    r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
+    assert r.status_code == 200 and r.get_json()["source"] == "comfyui_llama"
+
+
+def test_没编取数程序时第三档要说清去编译而不是让人点了才炸(make, tmp_path):
+    """第 3 档依赖一个**手编**的二进制（补丁版 llama.cpp 的产物）。没编时把选项照放出来，
+    用户切过去只会拿到"ComfyUI 报错"那种看不出根因的话。"""
+    client, _ = make(settings=llama_settings(tmp_path, built=False), saved_prefs=None)
+
+    assert client.get("/api/settings").get_json()["llama_ready"] is False
+    r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
+    assert r.status_code == 400 and "编译" in r.get_json()["message"]
+
+
+def test_第三档把编码节点与两个路径递下去(make, tmp_path):
+    seen = {}
+
+    def comfy_fn(comfy_url, person, refs, prompt, timeout=300, size="1k", **kwargs):
+        seen.update(kwargs, url=comfy_url)
+        return ok_comfy_generation(comfy_url, person, refs, prompt, size=size)
+
+    s = llama_settings(tmp_path / "x", built=True)
+    client, root = make(comfy_fn=comfy_fn, settings=s, saved_prefs="comfyui_llama")
+    assert client.post("/api/tryon", data=fields()).status_code == 200
+    assert seen["encoder"] == "llama"
+    assert seen["llama_repo_root"] == s.llama_repo_root and seen["llama_work_dir"] == s.llama_work_dir
+
+
+def test_第三档也不查额度并且记在记录里(make, tmp_path):
+    """第 3 档烧的是本机 GPU，跟第 2 档一样不花 credit：去查接口额度会多一次 CLI 调用，还会让人以为在花钱。"""
+    quota_calls = Counter(fake_quota)
+    client, root = make(comfy_fn=ok_comfy_generation, quota_fn=quota_calls,
+                        settings=llama_settings(tmp_path, built=True), saved_prefs="comfyui_llama")
+
+    body = client.get("/api/quota").get_json()
+    assert body["source"] == "comfyui_llama" and body["quota"] is None and quota_calls.calls == 0
+    client.post("/api/tryon", data=fields())
+    assert client.get("/api/records").get_json()["records"][0]["meta"]["source"] == "comfyui_llama"
+
+
+def test_第三档在_comfyui_掉线时同样当众切回_api(tmp_path):
+    """`/api/comfy/fallback` 原来写的是 `source != "comfyui"`：漏了第三档的话，
+    llama 档的人在 ComfyUI 没起时不会收到切换提示，而是一等按下按钮才撞墙。"""
+    from tryon.prefs import save_prefs
+
+    root = tmp_path / "records"
+    prefs_file = root.parent / "settings.json"
+    save_prefs(prefs_file, Prefs("comfyui_llama", COMFY_URL))
+    app = create_app(
+        llama_settings(tmp_path, built=True), generate_fn=ok_generation, root=root, quota_fn=fake_quota,
+        comfy_generate_fn=boom_comfy, comfy_check_fn=ok_check,
+        comfy_health_fn=lambda url: False, prefs_file=prefs_file,
+    )
+    app.testing = True
+
+    body = app.test_client().post("/api/comfy/fallback", json={}).get_json()
+    assert body["switched"] is True and body["source"] == "api"
 
 
 def test_posted_source_takes_effect_without_restart(make):
@@ -563,7 +642,7 @@ def test_save_failure_reports_without_traceback(make, monkeypatch):
 
 
 def test_check_endpoint_returns_problems_and_is_always_200(make):
-    client, _ = make(check_fn=lambda url: CheckResult(False, ("连不上 http://x",)))
+    client, _ = make(check_fn=lambda url, source="comfyui": CheckResult(False, ("连不上 http://x",)))
 
     r = client.post("/api/settings/check", json={"comfy_url": "http://x"})
     body = r.get_json()
@@ -574,8 +653,8 @@ def test_check_endpoint_returns_problems_and_is_always_200(make):
 def test_check_endpoint_falls_back_to_stored_url(make):
     seen = []
 
-    def spy(url):
-        seen.append(url)
+    def spy(url, source="comfyui"):
+        seen.append((url, source))
         return CheckResult(True, ())
 
     client, _ = make(check_fn=spy)
@@ -583,7 +662,7 @@ def test_check_endpoint_falls_back_to_stored_url(make):
 
     client.post("/api/settings/check", json={})
 
-    assert seen == ["http://stored:8188"]
+    assert seen == [("http://stored:8188", "comfyui")]  # 查的是当前那一条该装的节点
 
 
 def test_settings_page_and_js_use_relative_urls():

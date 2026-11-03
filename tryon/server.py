@@ -15,9 +15,11 @@ from tryon.joblock import LOCK_NAME, try_acquire, who_holds, release
 from tryon.prefs import (
     DEFAULT_COMFY_URL,
     DEFAULT_SIZE,
+    LLAMA_SOURCE,
     VALID_SIZES,
     VALID_SOURCES,
     fold_note,
+    is_local,
     Prefs,
     clamp_size,
     load_prefs,
@@ -125,6 +127,9 @@ def create_app(
                 "comfy_url": prefs.comfy_url,
                 "default_comfy_url": DEFAULT_COMFY_URL,
                 "valid_sources": list(VALID_SOURCES),
+                # 第 3 档不是"用户想不想"的问题，是"这台机上有没有那个手编的取数程序"的问题，
+                # 所以由服务端报状态、页面据此按住那一档（见 static/settings.js）
+                "llama_ready": settings.llama_ready,
                 "size": prefs.size,
                 "valid_sizes": list(VALID_SIZES),
             }
@@ -137,7 +142,15 @@ def create_app(
         # 没带 size 的旧请求保持它现有的档位，别把它悄悄换成默认档
         size = body.get("size", load_prefs(prefs_path, prefs_defaults).size)
         if source not in VALID_SOURCES:
-            return _fail("settings", f"来源只能是 api 或 comfyui，收到的是 {source!r}", 400)
+            return _fail("settings", f"来源只能是 {'、'.join(VALID_SOURCES)}，收到的是 {source!r}", 400)
+        if source == LLAMA_SOURCE and not settings.llama_ready:
+            return _fail(
+                "settings",
+                f"这台机上没有 llama.cpp 那一档：要 {settings.llama_repo_root}/tools/llama_gate/bin/dump_hidden "
+                "（用打了本地补丁的 llama.cpp 编译，命令写在那个 .cpp 文件头部）。编译出来再切，"
+                "或者先留在本机 ComfyUI 这一档。",
+                400,
+            )
         if not _is_http_url(comfy_url):
             return _fail("settings", "ComfyUI 地址要写成 http://主机:端口，比如 http://127.0.0.1:8188", 400)
         if size not in VALID_SIZES:
@@ -155,9 +168,18 @@ def create_app(
     def api_settings_check():
         """连不上也算正常完成，恒 200：问题是给用户看的清单，不是 HTTP 错误。"""
         body = request.get_json(silent=True) or {}
-        url = body.get("comfy_url") or load_prefs(prefs_path, prefs_defaults).comfy_url
-        result = comfy_check_fn(url)
-        return jsonify({"ok": result.ok, "problems": list(result.problems)})
+        prefs = load_prefs(prefs_path, prefs_defaults)
+        url = body.get("comfy_url") or prefs.comfy_url
+        # 查的是"这一档该有哪颗编码节点"：拿第 2 档的标准查第 3 档会两头都错（缺 llama 节点却报绿，
+        # 或者 8B 权重没下却报红），见 comfy_api.check 的 source 参数
+        result = comfy_check_fn(url, source=prefs.source)
+        problems = list(result.problems)
+        if prefs.source == LLAMA_SOURCE and not settings.llama_ready:
+            problems.append(
+                f"这台机上没有取数程序：{settings.llama_repo_root}/tools/llama_gate/bin/dump_hidden 不在，"
+                "第 3 档跑不了（编译命令在 dump_hidden.cpp 头部）"
+            )
+        return jsonify({"ok": result.ok and not problems, "problems": problems})
 
     @app.post("/api/comfy/fallback")
     def api_comfy_fallback():
@@ -181,7 +203,7 @@ def create_app(
             )
 
         prefs = load_prefs(prefs_path, prefs_defaults)
-        if prefs.source != "comfyui":
+        if not is_local(prefs.source):
             return answer(prefs.source, prefs.size, False, "")
         if _busy(lock_path):
             return answer(prefs.source, prefs.size, False, "上一次还在跑，这次没去探 ComfyUI")
@@ -199,9 +221,11 @@ def create_app(
         """
         prefs = load_prefs(prefs_path, prefs_defaults)
         busy = _busy(lock_path)
-        if prefs.source == "comfyui":
-            # 走本地不查额度，但档位仍然要回：前端按它决定浏览器压到多大
-            return jsonify({"ok": True, "source": "comfyui", "size": prefs.size, "quota": None, "busy": busy})
+        if is_local(prefs.source):
+            # 走本地不查额度，但档位仍然要回：前端按它决定浏览器压到多大。
+            # source 回的是**当前那一条**（comfyui / comfyui_llama）：前端拿它选估算基数，写死 comfyui 会让
+            # 第 3 档用第 2 档的时间去猜进度，而这两条实测差 8 秒多（§25）
+            return jsonify({"ok": True, "source": prefs.source, "size": prefs.size, "quota": None, "busy": busy})
         credits = credits_for(prefs.size)
         try:
             q = quota_fn()
@@ -340,10 +364,17 @@ def create_app(
             prompt = prompt_for(mode)
 
             started = time.monotonic()
-            local = prefs.source == "comfyui"
+            local = is_local(prefs.source)
+            # 第 3 档与第 2 档走同一个 ComfyUI、同一张图，只差编码那颗节点 —— 所以只多传三个参数，
+            # 不复制一条派发链（复制的话将来改超时/改重试会只改一边）
+            llama_kwargs = (
+                {"encoder": "llama", "llama_repo_root": settings.llama_repo_root,
+                 "llama_work_dir": settings.llama_work_dir}
+                if prefs.source == LLAMA_SOURCE else {}
+            )
             try:
                 g = (
-                    comfy_generate_fn(prefs.comfy_url, person, refs, prompt, size=prefs.size)
+                    comfy_generate_fn(prefs.comfy_url, person, refs, prompt, size=prefs.size, **llama_kwargs)
                     if local
                     # 档位并进 settings 再交给接口那条路：generate 的签名不动，请求体里的尺寸读 settings.size
                     else generate_fn(replace(settings, size=prefs.size), person, refs, prompt)

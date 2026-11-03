@@ -22,18 +22,24 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 
 - 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，同网络内任何设备都能访问，所以放公网前先看下面「登录」一节）。
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
-- 可选项：`TRYON_SOURCE`（`api` 或 `comfyui`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
+- 可选项：`TRYON_SOURCE`（`api` / `comfyui` / `comfyui_llama`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
   `TRYON_PASSWORD`（登录口令，缺省为空 = 不设登录）、`TRYON_COOKIE_SECURE`（`1` = 登录 cookie 只走 HTTPS）、
-  `TRYON_SIZE`（`480p` / `720p` / `1k` / `2k`，**缺省 `1k`**）。
+  `TRYON_SIZE`（`480p` / `720p` / `1k` / `2k`，**缺省 `1k`**）、
+  `TRYON_LLAMA_REPO_ROOT` / `TRYON_LLAMA_WORK_DIR`（第三个来源的两条路径，缺省就是本 repo 与 `data/llama-gate`）。
   这几个只是默认值，设置页里存的值优先。
 - **走本机 ComfyUI 这条（也就是缺省来源）要多装一个节点**：把 `comfy_nodes/qwen21_posonly_encode.py` 拷进
   ComfyUI 的 `custom_nodes/` 目录，然后**重启 ComfyUI** —— 自定义节点只在启动时加载。图里发的编码节点就是它：
   官方那个会把负向再编一遍，而 `cfg=1.0` 下那趟根本不进采样器，纯属白烧（1K 省 44 秒、720p 省 22 秒，
   同 seed 出图逐位相同，拆法与实测见 `docs/comfyui-measurements.md` §9）。装没装，设置页的「测一下能不能连上」会点名。
   这一步不在 pip 里，**换机器 / 重装 ComfyUI 时不会自动跟着走**。
-- `comfy_nodes/qwen21_precomp_cond.py` 是第三个来源的**spike**（把外部算好的 conditioning 注进图，用来判
-  llama.cpp 那份条件画出来是什么，见 `docs/comfyui-measurements.md` §23）。应用发的图从不引用它
-  （`tryon/comfy_api.py` 里没这个类名），所以装上也不参与生产那条链。
+- **第三个来源 `comfyui_llama`（编码换 llama.cpp）要多装两样东西**：把 `comfy_nodes/qwen21_precomp_cond.py`
+  拷进 ComfyUI 的 `custom_nodes/` 并**重启 ComfyUI**，再编译一个取数程序
+  `tools/llama_gate/bin/dump_hidden`（命令写在 `tools/llama_gate/dump_hidden.cpp` 头部，而且它要求
+  `~/work/llama/llama.cpp` 那份 `qwen3vl.cpp` 的本地补丁还在 —— 没补丁拿不到 pre-norm 那份出口）。
+  两样都在，设置页里那一档才给点；少任何一样，页面会按住它并说什么缺失（判定在 `Settings.llama_ready`）。
+  它**不是逐位复现的那条**：同 seed 同输入出的是同构图的另一个细节版本（`>16` 的像素占 0.330%、PSNR 38.40，
+  对照图与判读见 `docs/compare/llama-cond/index-live.html` 和测量文档 §23 / §24）。
+  默认来源仍是 `comfyui`，这一档目前给人自己点着看差别用（换来的是每档快 0~9 秒，见上面那张表）。
 - **AMD 显卡那台还要设一个环境变量**：ComfyUI 在 AMD 上默认把 `torch.backends.cudnn.enabled` 设成 `False`
   （`comfy/model_management.py:486-490`，注释写的是"对 AMD 性能更好"）。在这条工作流上它正好踩中最疼的地方：
   编码节点第一层的 patch-embedding 卷积因此走 PyTorch 原生参考实现，**同一层慢 23000 倍**（16.5 秒 vs 0.7 毫秒），
@@ -189,12 +195,12 @@ ComfyUI 的。界面给人看的是中文，来自 `tryon/samples.py` 里那张 
 
 设置页里四选一（**默认 1K**，`.env` 的 `TRYON_SIZE` 是它的默认值）：
 
-| 档 | 输出总像素上限 | 本地实测耗时 | API 单价 | 浏览器上传长边 |
-|---|---|---|---|---|
-| 480p | 307,200（= 480×640） | **11.2 秒** | 走不到（见下） | 1536 |
-| 720p | 786,432（= 768×1024） | **29.1 秒** | 走不到（见下） | 1536 |
-| 1K | 2,250,000 | **73.2 秒** | 58 credit | 1536 |
-| 2K | 4,157,440（= 实测成立的 1792×2320；11-03 那发出的是 1760×2336 = 4.11M） | **302.5 秒**（旧配置 543） | 108 credit，**不是 58 的两倍** | 2048 |
+| 档 | 输出总像素上限 | 本地实测耗时 | 第 3 档（llama.cpp 编码） | API 单价 | 浏览器上传长边 |
+|---|---|---|---|---|---|
+| 480p | 307,200（= 480×640） | **11.2 秒** | **11.8 秒** | 走不到（见下） | 1536 |
+| 720p | 786,432（= 768×1024） | **29.1 秒** | **25.4 秒** | 走不到（见下） | 1536 |
+| 1K | 2,250,000 | **73.2 秒** | **64.5 秒** | 58 credit | 1536 |
+| 2K | 4,157,440（= 实测成立的 1792×2320；11-03 那发出的是 1760×2336 = 4.11M） | **302.5 秒**（旧配置 543） | 两档都选不到 | 108 credit，**不是 58 的两倍** | 2048 |
 
 **这一列是 2026-11-03 的**：同一张 1152×1536 人像、同一件衣服，配置 = 只编正向的编码节点 +
 `COMFYUI_ENABLE_MIOPEN=1`（两条来历见「装与起」）。2K 也在新配置下重测过了（稳态 302.5 秒，

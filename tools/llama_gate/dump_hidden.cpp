@@ -10,12 +10,14 @@
 //  3) 媒体标记来自 mtmd_context_params.media_marker（本机这版默认 "<__media__>"）；
 //     prompt 里标记数必须等于 bitmap 数，否则 mtmd_tokenize 返回 1。
 //
-// 编译（b12073 = 从源码建的 ROCm 版，库在 build/bin；产物写去 /tmp，别落在源码树里）：
+// 编译（b12073 = 从源码建的 ROCm 版，库在 build/bin）：
 //   cd ~/work/llama/llama.cpp && g++ -O1 -std=c++17 \
 //     -I include -I ggml/include -I tools/mtmd -I src \
 //     ~/work/qwen-image/tools/llama_gate/dump_hidden.cpp \
 //     -L build/bin -lllama -lmtmd -Wl,-rpath,$PWD/build/bin \
-//     -o /tmp/llama-gate/dump_hidden
+//     -o ~/work/qwen-image/tools/llama_gate/bin/dump_hidden
+//   产物落 repo 里而不是 /tmp：调用方是 ComfyUI 的节点，机器重启后还得能用（`bin/` 已 gitignore，
+//   它是编译产物不是源）。换机器/换 ROCm 都要重编一遍，命令就抄这一行。
 //   （库必须排在源文件**之后**：先 -l 后 .cpp 会被 bfd 直接丢掉，报一堆 undefined reference to llama_free）
 //
 // 这份是 §19 那版的续：**多导出每个文本段的 token id**（在 meta.json 的 chunks[].ids 里）。
@@ -52,6 +54,7 @@ int main(int argc, char ** argv) {
     const char * prompt_path = nullptr;
     const char * out_dir = "/tmp/q3vl-gate";
     std::vector<std::string> imgs;
+    bool want_post = true;   // --no-post：DiT 要的是 pre-norm 那份，post 只在研究时对照用（一次 45 MB）
 
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "-m") && i + 1 < argc)            model_path = argv[++i];
@@ -59,9 +62,10 @@ int main(int argc, char ** argv) {
         else if (!std::strcmp(argv[i], "--prompt") && i + 1 < argc) prompt_path = argv[++i];
         else if (!std::strcmp(argv[i], "--img") && i + 1 < argc)    imgs.emplace_back(argv[++i]);
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc)    out_dir = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-post"))               want_post = false;
     }
     if (!model_path || !mmproj_path || !prompt_path || imgs.empty()) {
-        std::printf("用法：dump_hidden -m <gguf> --mmproj <mmproj> --prompt <带媒体标记的文本> --img <png> [...] [--out 目录]\n");
+        std::printf("用法：dump_hidden -m <gguf> --mmproj <mmproj> --prompt <带媒体标记的文本> --img <png> [...] [--out 目录] [--no-post]\n");
         return 2;
     }
 
@@ -160,17 +164,17 @@ int main(int argc, char ** argv) {
         if (r) { std::fprintf(stderr, "chunk %zu 解算失败 rc=%d\n", i, r); return 1; }
         lap("  eval 这段");
 
-        const float * post = llama_get_embeddings_ith(ctx, 0);
         const float * pre = llama_get_embeddings_layer_inp(ctx, static_cast<uint32_t>(n_layer));
-        if (!post || !pre) {
+        const float * post = want_post ? llama_get_embeddings_ith(ctx, 0) : nullptr;
+        if (!pre || (want_post && !post)) {
             std::fprintf(stderr, "拿不到向量（post=%p pre=%p）—— pre 为空说明补丁没生效或 layer_inp 没请求\n",
                          (const void *)post, (const void *)pre);
             return 1;
         }
         for (size_t t = 0; t < n_tokens; ++t) {
             for (int32_t e = 0; e < n_embd; ++e) {
-                post_all.push_back(post[t * n_embd + e]);
                 pre_all.push_back(pre[t * n_embd + e]);
+                if (want_post) post_all.push_back(post[t * n_embd + e]);
             }
         }
         if (i) meta += ",";
@@ -192,11 +196,12 @@ int main(int argc, char ** argv) {
         n_past = new_past;
     }
     lap("解码全部");
-    meta += "],\"total_rows\":" + std::to_string(post_all.size() / static_cast<size_t>(n_embd)) +
+    // total_rows 一律从 pre_all 算：两份的行数本来该相等，但 --no-post 时 post_all 是空的
+    meta += "],\"total_rows\":" + std::to_string(pre_all.size() / static_cast<size_t>(n_embd)) +
             ",\"补丁取的层\":" + std::to_string(n_layer) + "}";
 
     const std::string dir(out_dir);
-    write_bin(dir + "/post.bin", post_all);
+    if (want_post) write_bin(dir + "/post.bin", post_all);
     write_bin(dir + "/pre.bin", pre_all);
     std::ofstream mf(dir + "/meta.json");
     mf << meta;

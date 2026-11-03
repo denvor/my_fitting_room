@@ -185,6 +185,63 @@ def test_shipped_node_file_declares_the_class_the_graph_sends():
     assert f'node_id="{comfy_api.ENCODER_CLASS}"' in src
 
 
+LLAMA_ENCODER = "TextEncodeQwenImage21Precomputed"  # 第三档：编码换 llama.cpp，DiT/VAE 还是本机这套
+
+
+def test_llama_档换编码节点并把_CLIPLoader_摘了():
+    """8B 不在这儿算了，那颗 8.9 GB 的权重就不该进显存（省 19.5 秒，§16）。
+    留着 CLIPLoader 的话 ComfyUI 会照载不误 —— 节点不消费它不等于图里没有它。"""
+    g = build_graph("p.jpg", ["g.jpg"], "把衣服穿上", 1152, 7, "t", encoder="llama",
+                    llama_repo_root="/repo", llama_work_dir="/work")
+    assert not any(n["class_type"] == "CLIPLoader" for n in g.values())
+    inp = node(g, LLAMA_ENCODER)["inputs"]
+    assert "clip" not in inp
+    assert inp["cond_source"] == "llama" and inp["cond_path"] == "" and inp["cond_dtype"] == "float32"
+    assert inp["repo_root"] == "/repo" and inp["work_dir"] == "/work"
+    assert inp["prompt"] == "把衣服穿上" and inp["resolution"] == 1152 and inp["negative_prompt"] == ""
+
+
+def test_llama_档其余节点号一动不动():
+    """只摘掉 CLIP 那一格、只换编码节点内容：别的节点号平移了，图上连线和缓存键都会跟着变。"""
+    a = build_graph("p.jpg", ["g.jpg"], "x", 1152, 7, "t")
+    b = build_graph("p.jpg", ["g.jpg"], "x", 1152, 7, "t", encoder="llama")
+    clip = next(k for k, v in a.items() if v["class_type"] == "CLIPLoader")
+    assert set(b) == set(a) - {clip}
+    enc = next(k for k, v in b.items() if v["class_type"] == LLAMA_ENCODER)
+    s = node(b, "KSampler")["inputs"]
+    assert s["positive"] == [enc, 0] and s["negative"] == [enc, 1] and s["latent_image"] == [enc, 2]
+    assert s["cfg"] == 1.0  # 同 fork 节点的前提：负向是正向的别名
+    assert {k: v for k, v in b[enc]["inputs"].items() if k.startswith("images.")} == \
+           {k: v for k, v in a[next(k for k, v in a.items() if v["class_type"] == ENCODER)]["inputs"].items()
+            if k.startswith("images.")}
+
+
+def test_llama_档默认参数不该悄悄落到_posonly():
+    """encoder 拼错时静默走第 2 档 = 花着 llama 的时间、出着 fork 的图，验收时最不好查的那种。"""
+    with pytest.raises(ValueError, match="encoder"):
+        build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t", encoder="llma")
+
+
+def test_shipped_llama_node_file_declares_the_class_the_graph_sends():
+    src = (Path(__file__).resolve().parent.parent / "comfy_nodes" / "qwen21_precomp_cond.py").read_text()
+    assert f'node_id="{comfy_api.ENCODER_CLASS_LLAMA}"' in src
+
+
+def test_generate_forwards_the_encoder_and_says_which_path_it_was(wire):
+    """记录里得能看出这张图是哪条路出的：两档的图差是细节级的，事后分不开就没法对拍。"""
+    fake = wire(Fake(histories=[completed()]))
+    g = generate(URL, PERSON, [GARMENT], "把衣服穿上", timeout=60,
+                 encoder="llama", llama_repo_root="/repo", llama_work_dir="/work")
+    graph = fake.prompt_payloads[0]["prompt"]
+    assert node(graph, LLAMA_ENCODER) and not any(n["class_type"] == "CLIPLoader" for n in graph.values())
+    assert g.source == "comfyui_llama"
+
+
+def test_default_path_still_reports_plain_comfyui(wire):
+    wire(Fake(histories=[completed()]))
+    assert generate(URL, PERSON, [GARMENT], "x", timeout=60).source == "comfyui"
+
+
 def test_encode_and_decode_share_one_vae_node():
     g = build_graph("p.jpg", ["g.jpg"], "x", 0, 1, "t")
     enc, dec = node(g, ENCODER)["inputs"], node(g, "VAEDecode")["inputs"]
@@ -308,6 +365,7 @@ GOOD = {
     "/system_stats": {"system": {"comfyui_version": "0.39.0"}},
     "/object_info/TextEncodeQwenImage21": {"TextEncodeQwenImage21": {"input": {"required": {}}}},
     f"/object_info/{ENCODER}": {ENCODER: {"input": {"required": {}}}},
+    f"/object_info/{LLAMA_ENCODER}": {LLAMA_ENCODER: {"input": {"required": {}}}},
     "/object_info/UNETLoader": enum_info("UNETLoader", "unet_name", [UNET, "other.safetensors"]),
     "/object_info/CLIPLoader": enum_info("CLIPLoader", "clip_name", [CLIP]),
     "/object_info/VAELoader": enum_info("VAELoader", "vae_name", [VAE]),
@@ -353,6 +411,21 @@ def test_check_reports_the_missing_custom_encoder(serve):
     result = comfy_api.check(URL)
     assert not result.ok and ENCODER in result.problems[0]
     assert "custom_nodes" in result.problems[0] and "重启" in result.problems[0]
+
+
+def test_check_llama_source_缺的是_llama_那颗节点(serve):
+    """第 3 档发的是另一颗节点：自检还去查 PosOnly 的话，装好了第 3 档也永远红，缺了也永远绿。"""
+    serve({**GOOD, f"/object_info/{LLAMA_ENCODER}": {}})
+    result = comfy_api.check(URL, source="comfyui_llama")
+    assert not result.ok and LLAMA_ENCODER in result.problems[0]
+    assert "qwen21_precomp_cond.py" in result.problems[0]
+
+
+def test_check_llama_source_不查那颗_8B(serve):
+    """第 3 档的图里没有 CLIPLoader，那 8.9 GB 权重没下载也照样能出图：按第 2 档的标准查它会报假问题。"""
+    serve({**GOOD, "/object_info/CLIPLoader": enum_info("CLIPLoader", "clip_name", ["nope"])})
+    assert comfy_api.check(URL, source="comfyui_llama").ok
+    assert not comfy_api.check(URL).ok  # 第 2 档仍然要它
 
 
 def test_check_names_the_weight_that_is_missing(serve):

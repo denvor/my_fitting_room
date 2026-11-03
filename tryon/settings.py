@@ -1,6 +1,7 @@
 """从 .env 读取接口地址、密钥和模型名。"""
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from tryon.prefs import DEFAULT_COMFY_URL, DEFAULT_SIZE, VALID_SIZES, VALID_SOURCES
@@ -23,6 +24,21 @@ class Settings:
     # 站在 HTTPS 反代后面时设 TRYON_COOKIE_SECURE=1，登录 cookie 才只走加密通道
     cookie_secure: bool = False
     size: str = DEFAULT_SIZE
+    # 第 3 档（llama.cpp 出编码）的两条部署路径。默认就指着**本 repo**：tools/llama_gate 在这儿，
+    # 取数二进制也编在这儿 —— 换机器或换布局才需要用 .env 覆盖。
+    llama_repo_root: str = str(PROJECT_ROOT)
+    llama_work_dir: str = str(PROJECT_ROOT / "data" / "llama-gate")
+
+    @property
+    def llama_ready(self) -> bool:
+        """第 3 档在这台机上成不成立：两条路径都有，而且**取数二进制真在场**。
+
+        查在场而不是查配置，是因为那一档依赖一个手编的二进制（打了本地补丁的 llama.cpp 的产物，TODO.md T3）：
+        路径填对了但没编译，用户切过去只会拿到一句看不出来根的"ComfyUI 报错"。
+        """
+        if not (self.llama_repo_root and self.llama_work_dir):
+            return False
+        return os.path.isfile(os.path.join(self.llama_repo_root, "tools", "llama_gate", "bin", "dump_hidden"))
 
 
 class SettingsError(Exception):
@@ -67,7 +83,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
             raise SettingsError(f"{path} 里缺少 {required}")
 
     env_source = values.get("TRYON_SOURCE")
-    return Settings(
+    base = Settings(
         endpoint=derive_endpoint(values["OPENAI_URL"]),
         api_key=values["API_KEY"],
         model=values["MODEL"],
@@ -79,3 +95,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         # 档位写错照样不拦启动，按默认档走（和 TRYON_SOURCE 一个道理）
         size=values.get("TRYON_SIZE") if values.get("TRYON_SIZE") in VALID_SIZES else DEFAULT_SIZE,
     )
+    # 第 3 档那两条路径不写就用本 repo 自己（`tools/llama_gate` 与 `data/llama-gate` 本来就在那儿）：
+    # 默认值只写在 dataclass 一处，免得 .env 缺键时两处说法不一致
+    for field, key in (("llama_repo_root", "TRYON_LLAMA_REPO_ROOT"), ("llama_work_dir", "TRYON_LLAMA_WORK_DIR")):
+        if values.get(key):
+            base = replace(base, **{field: values[key]})
+    return base

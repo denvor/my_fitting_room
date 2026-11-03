@@ -228,6 +228,14 @@ def test_two_k_is_only_the_api_paths_band():
     assert clamp_size("api", "2k") == "2k"  # 接口那条照旧：108 credit、时间也没本地这么久
 
 
+def test_第三档跟第_2_档同进同出():
+    """llama 那档换的只是编码：DiT 还在本机跑，所以 2K 照样跑不完（§25 量到 1K 64.5 秒，2K 只会更长），
+    而 480p / 720p 是本机独有的低档，它也照样有 —— 别把第三档当成"另一台机器"单独放行。"""
+    assert clamp_size("comfyui_llama", "2k") == "1k"
+    assert clamp_size("comfyui_llama", "720p") == "720p"
+    assert clamp_size("comfyui_llama", "1k") == "1k"
+
+
 def test_a_saved_local_2k_folds_on_load(tmp_path):
     f = tmp_path / "settings.json"
     f.write_text(SAVED_2K_COMFY, encoding="utf-8")
@@ -293,7 +301,7 @@ def make(tmp_path, rec, prefs_text=None, **over):
         secret_file=tmp_path / "secret.key",
         generate_fn=rec.api_fn,
         comfy_generate_fn=rec.comfy_fn,
-        comfy_check_fn=lambda url: None,
+        comfy_check_fn=lambda url, source="comfyui": None,
         quota_fn=rec.quota_fn,
     )
     return app

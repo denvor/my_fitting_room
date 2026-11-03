@@ -29,6 +29,10 @@ CFG = 1.0
 # 这个 fork **只在 cfg=1.0 下与官方等价**（它返回的"负向"是正向的别名），
 # 所以 test_encoder_skips_the_negative_pass_and_keeps_the_wiring 里特意把那颗 cfg 钉在这条依赖旁边。
 ENCODER_CLASS = "TextEncodeQwenImage21PosOnly"
+# 第三档（llama.cpp 出编码）换的只有这一颗节点：DiT / VAE / 采样全部照旧。
+# 节点源码 `comfy_nodes/qwen21_precomp_cond.py`，装法同上面那颗（拷进 custom_nodes 后重启才生效）。
+ENCODER_CLASS_LLAMA = "TextEncodeQwenImage21Precomputed"
+ENCODERS = ("posonly", "llama")
 
 HTTP_TIMEOUT = 30
 VIEW_TIMEOUT = 60
@@ -111,34 +115,58 @@ def comfy_resolution(width: int, height: int, size: str = "1k") -> int:
     return isqrt(ceiling) // RESOLUTION_STEP * RESOLUTION_STEP
 
 
-def build_graph(person_name: str, ref_names: list[str], prompt: str, resolution: int, seed: int, prefix: str) -> dict:
+def build_graph(person_name: str, ref_names: list[str], prompt: str, resolution: int, seed: int, prefix: str,
+                encoder: str = "posonly", llama_repo_root: str = "", llama_work_dir: str = "") -> dict:
     """人像占 1 号、参考图从 2 号起连排，模型链再往后接 —— 单参考图时逐字等于规格 §6.2 那份图。
 
     参考图必须写成 `images.image_1` 这种点号平铺的键：换成嵌套字典或数组，ComfyUI 不报错，
     只是把参考图丢掉，于是输出 1024 正方形、人和衣服全是凭空编的（§6.3）。
     节点号只是号，但编码节点里那些 `["7", 0]` 引用是真的按号连的，所以整条链跟着参考图张数平移。
+
+    `encoder`：`posonly` = 第 2 档（8B 在图里算，生产在用）；`llama` = 第 3 档，
+    只把编码那颗节点换掉、并**把 CLIPLoader 从图里摘掉**（不摘的话 ComfyUI 照样载那 8.9 GB）。
     """
+    if encoder not in ENCODERS:
+        raise ValueError(f"encoder 只认 {ENCODERS}，收到的是 {encoder!r}")
     slots = 1 + len(ref_names)  # 人像 + 参考图，模型链从这之后开始编号
     load = {str(i + 1): {"class_type": "LoadImage", "inputs": {"image": name}}
             for i, name in enumerate([person_name, *ref_names])}
     unet, cache, clip, vae, enc, samp, dec, save = (str(slots + k) for k in range(1, 9))
+    images_wiring = {f"images.image_{i + 1}": [str(i + 1), 0] for i in range(slots)}
+    enc_node = {
+        "class_type": ENCODER_CLASS,
+        "inputs": {
+            "clip": [clip, 0],
+            "vae": [vae, 0],
+            "prompt": prompt,
+            "negative_prompt": "",
+            "resolution": resolution,
+            **images_wiring,
+        },
+    }
+    if encoder == "llama":
+        enc_node = {
+            "class_type": ENCODER_CLASS_LLAMA,
+            "inputs": {
+                "vae": [vae, 0],
+                "prompt": prompt,
+                "negative_prompt": "",
+                "resolution": resolution,
+                "cond_path": "",
+                "cond_source": "llama",       # 非空即"现场取数"，见节点里 _cond_via_llama
+                "cond_dtype": "float32",      # 写死而不靠默认值：§23/§24 那两发都是 float32 量的
+                "repo_root": llama_repo_root,
+                "work_dir": llama_work_dir,
+                **images_wiring,
+            },
+        }
     graph = {
         **load,
         unet: {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_NAME, "weight_dtype": "default"}},
         cache: {"class_type": "QwenImage21Cache", "inputs": {"model": [unet, 0], "device": "auto", "dtype": "default"}},
         clip: {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_NAME, "type": "qwen_image"}},
         vae: {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
-        enc: {
-            "class_type": ENCODER_CLASS,
-            "inputs": {
-                "clip": [clip, 0],
-                "vae": [vae, 0],
-                "prompt": prompt,
-                "negative_prompt": "",
-                "resolution": resolution,
-                **{f"images.image_{i + 1}": [str(i + 1), 0] for i in range(slots)},
-            },
-        },
+        enc: enc_node,
         samp: {
             "class_type": "KSampler",
             "inputs": {
@@ -157,6 +185,8 @@ def build_graph(person_name: str, ref_names: list[str], prompt: str, resolution:
         dec: {"class_type": "VAEDecode", "inputs": {"samples": [samp, 0], "vae": [vae, 0]}},
         save: {"class_type": "SaveImage", "inputs": {"images": [dec, 0], "filename_prefix": prefix}},
     }
+    if encoder == "llama":
+        del graph[clip]   # 只删这一格，其余节点号一律不动（平移会让缓存键和连线全变）
     return graph
 
 
@@ -188,6 +218,9 @@ def generate(
     prompt: str,
     timeout: int | None = None,
     size: str = "1k",
+    encoder: str = "posonly",
+    llama_repo_root: str = "",
+    llama_work_dir: str = "",
 ) -> Generation:
     url = comfy_url.rstrip("/")
     limit = timeout if timeout is not None else TIMEOUT_BY_SIZE[size]
@@ -197,7 +230,8 @@ def generate(
         _post_multipart(f"{url}/upload/image", "image", filename, blob.data, HTTP_TIMEOUT)
         for filename, blob in zip(("person.jpg", *REF_FILENAMES), [person, *refs])
     ]
-    graph = build_graph(names[0], names[1:], prompt, resolution, random.randrange(1, 2**62), "tryon")
+    graph = build_graph(names[0], names[1:], prompt, resolution, random.randrange(1, 2**62), "tryon",
+                        encoder=encoder, llama_repo_root=llama_repo_root, llama_work_dir=llama_work_dir)
     prompt_id = str(_post_json(f"{url}/prompt", {"prompt": graph}, HTTP_TIMEOUT).get("prompt_id") or "")
     if not prompt_id:
         raise ComfyRejected(url, "入队没有返回 prompt_id")
@@ -242,7 +276,9 @@ def generate(
         },
         request_id=prompt_id,
         rewrite_status="",
-        source="comfyui",
+        # 记录里要能看出是哪条路出的图：第 3 档与第 2 档的差别只在编码那颗节点，
+        # 事后拿"哪张图是哪档生的"做对拍时，混在一个 source 里就没法分了
+        source="comfyui_llama" if encoder == "llama" else "comfyui",
     )
 
 
@@ -265,21 +301,29 @@ def healthy(comfy_url: str) -> bool:
         return False
 
 
-def check(comfy_url: str) -> CheckResult:
-    """设置页那颗按钮：能不能连上、节点在不在、权重名对不对，几种坏法分开说。"""
+def check(comfy_url: str, source: str = "comfyui") -> CheckResult:
+    """设置页那颗按钮：能不能连上、节点在不在、权重名对不对，几种坏法分开说。
+
+    `source` 决定"该有哪颗编码节点"和"要不要那颗 8B"：第 3 档的图里没有 `CLIPLoader`，
+    按第 2 档的标准查它会报"权重没下载"那种假问题，而真要缺的 llama 节点反倒没查。
+    """
     url = comfy_url.rstrip("/")
+    llama = source == "comfyui_llama"
+    want_node = ENCODER_CLASS_LLAMA if llama else ENCODER_CLASS
     try:
         _get_json(f"{url}/system_stats", CHECK_TIMEOUT)
         # 官方那个编码节点图里已经不用了，留这一条是当"ComfyUI 版本够新"的代理：
         # 它随 2.1 的工作流一起进核心，缺它基本意味着这台跑不了这套图（`QwenImage21Cache` 也一起缺）
         if not _get_json(f"{url}/object_info/TextEncodeQwenImage21", CHECK_TIMEOUT):
             return CheckResult(False, (f"{url} 这台 ComfyUI 没有 TextEncodeQwenImage21 节点，版本或装法不对",))
-        if not _get_json(f"{url}/object_info/{ENCODER_CLASS}", CHECK_TIMEOUT):
+        if not _get_json(f"{url}/object_info/{want_node}", CHECK_TIMEOUT):
             return CheckResult(False, (
-                f"{url} 这台 ComfyUI 没装 {ENCODER_CLASS}：把仓库里的 comfy_nodes/qwen21_posonly_encode.py "
+                f"{url} 这台 ComfyUI 没装 {want_node}：把仓库里的 comfy_nodes/"
+                f"{'qwen21_precomp_cond' if llama else 'qwen21_posonly_encode'}.py "
                 "拷进 ComfyUI 的 custom_nodes 目录，再重启 ComfyUI 才生效（图里发的就是它）",))
         problems = []
-        for cls, (widget, want) in WEIGHTS.items():
+        weights = {k: v for k, v in WEIGHTS.items() if not (llama and k == "CLIPLoader")}
+        for cls, (widget, want) in weights.items():
             options = _enum_options(_get_json(f"{url}/object_info/{cls}", CHECK_TIMEOUT), cls, widget)
             if options is None:
                 problems.append(f"读不到 {cls} 的 {widget} 可选值，这台 ComfyUI 的接口形状和预期不一样")

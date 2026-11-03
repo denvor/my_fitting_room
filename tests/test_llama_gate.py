@@ -9,6 +9,7 @@
 import pytest
 
 from tools.llama_gate.encode import media_prompt
+from tools.llama_gate.gate_client import gate_layout, resolve_gate_bin, run_gate
 from tools.llama_gate.keep_rows import kept_row_index
 
 IM_START = 151644
@@ -93,3 +94,84 @@ def test_无图时模板原样只有指令():
     p = media_prompt(TPL, "把衣服穿上", 0)
     assert p.count("<__media__>") == 0
     assert p.endswith("assistant\n") and "把衣服穿上<" in p
+
+
+# —— gate_layout：落地字节数与 meta 的账。读盘那几行需要 torch，放在真机验证（§25），这里只量算术 ——
+
+# 37 行的小序列（段长 20/6/2/4/5），kept 是 15 行
+SMALL_CHUNKS = [
+    {"kind": "text", "n_tokens": 20, "ids": [IM_START] + [7001] * 11 + [IM_START] + [7002] * 7},
+    {"kind": "image", "n_tokens": 6},
+    {"kind": "text", "n_tokens": 2, "ids": [151653, 151652]},
+    {"kind": "image", "n_tokens": 4},
+    {"kind": "text", "n_tokens": 5, "ids": [151653, 8000, 8001, 8002, 8003]},
+]
+N_EMBD = 3
+META = {"n_embd": N_EMBD, "total_rows": 37, "chunks": SMALL_CHUNKS}
+
+
+def test_gate_layout给出要读的行号与槽位():
+    idx, slots = gate_layout(META, 37 * N_EMBD * 4)
+    assert idx == list(range(12, 20)) + [26, 27] + list(range(32, 37))
+    assert slots == [8, 10]
+
+
+def test_gate_layout文件短了要报错():
+    """进程被杀 / 盘满时 pre.bin 只剩半截，硬拿会读出一堆越界或 0 —— 条件是向量，看不出来。"""
+    with pytest.raises(ValueError, match="pre.bin"):
+        gate_layout(META, 10 * N_EMBD * 4)
+
+
+def test_gate_layout段长与总行数不符要报错():
+    """total_rows 与 chunks 各说一套 = 那份 meta 不是这次跑的（比如指错了目录）。"""
+    with pytest.raises(ValueError, match="total_rows"):
+        gate_layout({**META, "total_rows": 40}, 40 * N_EMBD * 4)
+
+
+def test_一行都没丢掉要报错():
+    """没套 ChatML 模板的裸指令：没有 im_start、也没有视觉块 ⇒ 一行都不丢。
+    这时喂给 DiT 的是整条序列，slot 位置全对不上，但**它不崩，只是图坏**。"""
+    bare = {"n_embd": N_EMBD, "total_rows": 4, "chunks": [{"kind": "text", "n_tokens": 4, "ids": [100, 101, 102, 103]}]}
+    with pytest.raises(ValueError, match="一行都没丢"):
+        gate_layout(bare, 4 * N_EMBD * 4)
+
+
+def test_run_gate默认带上no_post(tmp_path, monkeypatch):
+    """DiT 只要 pre-norm 那份；post.bin 一次 45 MB，写了没人读。"""
+    seen = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        (tmp_path / "meta.json").write_text('{"n_embd": 3, "total_rows": 1, "chunks": []}')
+        return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    run_gate(["a.png"], "文本", str(tmp_path), gate_bin="/bin/true", gguf="m", mmproj="p")
+    assert "--no-post" in seen[0]
+    seen.clear()
+    run_gate(["a.png"], "文本", str(tmp_path), gate_bin="/bin/true", gguf="m", mmproj="p", want_post=True)
+    assert "--no-post" not in seen[0]
+
+
+def test_二进制默认落在repo的bin里而不是tmp(monkeypatch):
+    """/tmp 里的产物重启就没：调用方是 ComfyUI 节点，机器一重启就找不到取数程序。"""
+    monkeypatch.delenv("LLAMA_GATE_BIN", raising=False)
+    p = resolve_gate_bin()
+    assert p.endswith("tools/llama_gate/bin/dump_hidden")
+
+
+def test_环境变量能指定另一个二进制(monkeypatch):
+    monkeypatch.setenv("LLAMA_GATE_BIN", "/opt/gate/dump_hidden")
+    assert resolve_gate_bin() == "/opt/gate/dump_hidden"
+
+
+def test_二进制不在时报错要说清怎么编出来(monkeypatch):
+    """换机器、或者刚 git clean 掉 bin/ —— 现场只有一句"没有那个文件"的话，没人知道要去编译。"""
+    monkeypatch.setenv("LLAMA_GATE_BIN", "/definitely/not/here/dump_hidden")
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("二进制不在就不该把子进程起起来")
+
+    monkeypatch.setattr("subprocess.run", refuse)
+    with pytest.raises(RuntimeError, match="编译"):
+        run_gate(["a.png"], "文本", "/tmp/whatever")

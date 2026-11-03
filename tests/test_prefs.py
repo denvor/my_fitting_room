@@ -2,7 +2,28 @@ import os
 import threading
 from pathlib import Path
 
-from tryon.prefs import DEFAULT_COMFY_URL, Prefs, load_prefs, save_prefs
+from tryon.prefs import DEFAULT_COMFY_URL, VALID_SOURCES, Prefs, is_local, load_prefs, save_prefs
+
+
+def test_第三档是合法来源而且算本机那条():
+    """`comfyui_llama` 换的只是编码那颗节点，DiT/VAE 还在本机 ComfyUI 上跑。
+    所以"不花额度、超时按本地算、2K 不给选"这些**都该跟着本机那条走** —— is_local 就是这个判定的唯一出处。"""
+    assert VALID_SOURCES == ("api", "comfyui", "comfyui_llama")
+    assert is_local("comfyui") and is_local("comfyui_llama")
+    assert not is_local("api") and not is_local("gps")
+
+
+def test_第三档存得进去也读得回来(tmp_path):
+    f = tmp_path / "settings.json"
+    save_prefs(f, Prefs("comfyui_llama", DEFAULT_COMFY_URL, "720p"))
+    assert load_prefs(f) == Prefs("comfyui_llama", DEFAULT_COMFY_URL, "720p")
+
+
+def test_第三档拼错时照旧回落(tmp_path):
+    """`comfy_llama`（漏了 ui）这种错要当"值不认识"回落默认来源，不能当合法值存下去。"""
+    f = tmp_path / "settings.json"
+    f.write_text('{"source": "comfy_llama", "comfy_url": "http://x:1"}', encoding="utf-8")
+    assert load_prefs(f).source == "comfyui"
 
 
 def test_missing_file_falls_back_to_defaults(tmp_path):

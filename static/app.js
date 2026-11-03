@@ -10,10 +10,25 @@ const ESTIMATE_MS = {
   "comfyui-720p": 29000,
   "comfyui-1k": 73000,
   "comfyui-2k": 302000,
+  // 第 3 档（llama.cpp 出编码）：三格都是 2026-11-03 同实例并排量的稳态数（§25 的八腿表）。
+  // 对照 §17 那三格干净的稳态数（11.2 / 29.1 / 73.2）：480p 基本打平（桥那 7 秒刚好抵掉省下的编码），
+  // 720p 快约 4 秒，1K 快约 9 秒 —— 编码越贵的那一档越划算。
+  "comfyui_llama-480p": 11800,
+  "comfyui_llama-720p": 25400,
+  "comfyui_llama-1k": 64500,
 };
+// 来源判定与后端 tryon/prefs.py 的 is_local() 同一件事：这两条都跑在本机、都不花额度。
+const LOCAL_SOURCES = ["comfyui", "comfyui_llama"];
+const isLocal = (s) => LOCAL_SOURCES.includes(s);
 const BANDS = ["480p", "720p", "1k", "2k"]; // 和后端 prefs.VALID_SIZES 同一套顺序
 const BAND_LABEL = { "480p": "480p", "720p": "720p", "1k": "1K", "2k": "2K" }; // 低档大写会变成 480P，那是型号写法不是这里要的
-const LOCAL_SECONDS = { "480p": 11, "720p": 29, "1k": 73, "2k": 302 }; // 单件那档，四格都是 2026-11-03 同机实测
+// 单件那档的实测秒数，按来源分开。第 3 档那三格是 §25 同实例八腿**第二遍**的稳态数（11.8 / 25.4 / 64.5）；
+// 第一遍不能取，那是新进程价（480p 的 posonly 腿 18.4 vs 稳态 13.2，差的就是载权重那 7 秒）。
+// 2K 两档都选不到（后端会收成 1K），所以 llama 那行没这一格，waitText() 拿不到就退回第 2 档的数。
+const LOCAL_SECONDS = {
+  comfyui: { "480p": 11, "720p": 29, "1k": 73, "2k": 302 },
+  comfyui_llama: { "480p": 11.8, "720p": 25.4, "1k": 64.5 },
+};
 // 这四格是**第一发**的价：同一张图同一句指令只换 seed 再点一次，编码被 ComfyUI 按内容
 // 缓存住，1K 只要 54 秒、2K 只要 208 秒。所以这些数是上界，确认框只会说多不会说少 —— 照上界来是对的，反过来会让人干等。
 // 但**新形状的第一发比这里写的更贵**（MIOpen 找解）：2K 那一发实测 570.7 秒、720p 104 秒、480p 49 秒 ——
@@ -176,7 +191,7 @@ function hintText() {
   const slots = slotsFor(mode);
   if (working.person || slots.some((kind) => working[kind])) return "图片还在处理…";
   if (serverBusy)
-    return `上一次还在跑（${serverBusy.source === "comfyui" ? "本地 ComfyUI" : "API"} · 已 ${serverBusy.age_s} 秒），结束前不能再点。`;
+    return `上一次还在跑（${isLocal(serverBusy.source) ? "本地 ComfyUI" : "API"} · 已 ${serverBusy.age_s} 秒），结束前不能再点。`;
   const need = [];
   if (!files.person) need.push("你自己的照片");
   for (const kind of slots) if (!files[kind]) need.push(slotLabel(kind));
@@ -254,7 +269,7 @@ function startTape(prefix = "生成中") {
   const step = () => {
     const elapsed = Date.now() - startedAt;
     // 第二张参考图那 1.36 倍只在本地这条量过，API 那边没依据，所以不加进去
-    const base = (ESTIMATE_MS[`${genSource}-${genSize}`] || 90000) * (genSource === "comfyui" ? MODE_FACTOR[mode] || 1 : 1);
+    const base = (ESTIMATE_MS[`${genSource}-${genSize}`] || 90000) * (isLocal(genSource) ? MODE_FACTOR[mode] || 1 : 1);
     setPct(Math.min(90, 100 * (1 - Math.exp((-1.6 * elapsed) / base))));
     $("readout").textContent = `${prefix} · ${Math.round(elapsed / 1000)} 秒`;
   };
@@ -272,9 +287,9 @@ function stopTape() {
 function usageLine(meta, elapsed) {
   const u = meta.usage || {};
   const kind = meta.mode && meta.mode !== "single" ? MODES[meta.mode] : null; // 单件是默认，不必每行都写
-  if (meta.source === "comfyui") {
+  if (isLocal(meta.source)) {
     // 本地这条没有接口回传的那套档位字段，说清是谁出的、哪一档、多大、多久就够
-    const local = ["本地 ComfyUI"];
+    const local = [meta.source === "comfyui_llama" ? "本地 ComfyUI · llama 编码" : "本地 ComfyUI"];
     if (meta.band) local.push(`${BAND_LABEL[meta.band] || meta.band} 档`); // 低档不能大写，那是 480P
     if (u.output_width && u.output_height) local.push(`输出 ${u.output_width}×${u.output_height}`);
     if (kind) local.splice(1, 0, kind);
@@ -326,7 +341,10 @@ function setBusy(busy) {
 // 页眉和确认框共用这一句：单件那档 480p/720p/1K 是 11-03 的实测点（2K 是旧配置的数，且本机这条选不到它），
 // 两个新分类只有 720p 是实测，别的档位是照 720p 那两个点乘 1.36 推的 —— 推的就说是推的。
 function waitText() {
-  const raw = (LOCAL_SECONDS[genSize] || 0) * (MODE_FACTOR[mode] || 1);
+  // 缺格退回第 2 档那一行的同档数：llama 那行没写 2K（本机两条都选不到它），
+  // 但 `||` 只在整个来源行缺失时才兜底，格子缺失会算出 0 秒 —— 浏览器里真撞出来过一句"实测约 0 秒"
+  const perBand = LOCAL_SECONDS[genSource] || {};
+  const raw = (perBand[genSize] ?? LOCAL_SECONDS.comfyui[genSize] ?? 0) * (MODE_FACTOR[mode] || 1);
   const s = raw >= 60 ? Math.round(raw / 5) * 5 : Math.round(raw);
   const shown = s >= 120 ? `${Math.round(s / 60)} 分钟` : `${s} 秒`;
   return mode === "single" || genSize === "720p" ? `实测约 ${shown}` : `约 ${shown}（按 720p 的实测点推）`;
@@ -334,9 +352,9 @@ function waitText() {
 
 function confirmStart() {
   const band = BAND_LABEL[genSize];
-  if (genSource === "comfyui") {
+  if (isLocal(genSource)) {
     return confirm(
-      `开始试穿？\n\n本机 ComfyUI 生成 · ${MODES[mode]} · ${band} 档 · 不花额度 · ${waitText()}。\n\n取消不动图片。`
+      `开始试穿？\n\n${genSource === "comfyui_llama" ? "本机 ComfyUI · llama.cpp 编码" : "本机 ComfyUI"} 生成 · ${MODES[mode]} · ${band} 档 · 不花额度 · ${waitText()}。\n\n取消不动图片。`
     );
   }
   const cost = quota
@@ -375,7 +393,7 @@ async function loadQuota() {
   const el = $("quota");
   try {
     const body = await (await fetch("api/quota")).json();
-    genSource = body.source === "comfyui" ? "comfyui" : "api";
+    genSource = ["api", ...LOCAL_SOURCES].includes(body.source) ? body.source : "api"; // 认后端报的那三个，别把第 3 档折成 API
     genSize = BANDS.includes(body.size) ? body.size : "1k"; // 只认后端报的四档之一，其余一律当默认档
     // 后端的生成锁。这一条是给"连接被 nginx 掐断"那种情况兜底的：前端只知道请求失败了，
     // 服务端其实还在跑 —— 按钮得继续按住，过几秒再问一次，跑完顺手把图库刷出来（图本来就在库里）。
@@ -385,7 +403,7 @@ async function loadQuota() {
     clearTimeout(busyTimer);
     if (serverBusy) busyTimer = setTimeout(loadQuota, 5000);
     else if (wasBusy) loadGallery(true);
-    if (genSource === "comfyui") {
+    if (isLocal(genSource)) {
       // 走本地时后端根本不去查额度；这一行也不假装知道 ComfyUI 连不连得上
       quota = null;
       // 本地这条不查额度，也不假装知道 ComfyUI 连不连得上；秒数是同机实测的那三个点
@@ -576,8 +594,8 @@ async function pickFromLibrary(item, btn) {
 
 // 页眉那一行：只有走本地时它带着秒数，而秒数现在要看分类
 function renderLocalLine() {
-  if (genSource !== "comfyui") return;
-  $("quota").textContent = `本机 ComfyUI · ${MODES[mode]} · ${BAND_LABEL[genSize]} 档 · 不花额度 · ${waitText()}`;
+  if (!isLocal(genSource)) return;
+  $("quota").textContent = `${genSource === "comfyui_llama" ? "本机 ComfyUI · llama.cpp 编码" : "本机 ComfyUI"} · ${MODES[mode]} · ${BAND_LABEL[genSize]} 档 · 不花额度 · ${waitText()}`;
 }
 
 function recordCell(rec) {
@@ -592,7 +610,7 @@ function recordCell(rec) {
   btn.dataset.caption = `${rec.meta.created_at} · ${usageLine(rec.meta, rec.meta.elapsed_s).join(" · ")}`;
   const badge = document.createElement("span");
   badge.className = "src-badge";
-  badge.textContent = rec.meta.source === "comfyui" ? "本地" : "API";
+  badge.textContent = isLocal(rec.meta.source) ? "本地" : "API"; // 两条本地来源共用一个角标：哪颗编码出的图写在标题那行里
   badge.setAttribute("aria-hidden", "true"); // 来源在灯箱标题里也有一份，这里只是给眼睛看的
   btn.append(badge);
   const shown = [["person", "本人照片"], ["garment", slotCap(rec.meta.mode, 0)], ["result", "试穿成品"]];

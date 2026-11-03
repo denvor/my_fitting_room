@@ -39,7 +39,7 @@ class Stubs:
 def make(tmp_path, password=PW, secret_file=None, stubs=None, **over):
     stubs = stubs or Stubs()
 
-    def check_fn(url):
+    def check_fn(url, source="comfyui"):
         raise AssertionError("不该走自检")
 
     settings = Settings(

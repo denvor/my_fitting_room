@@ -1,4 +1,4 @@
-"""来源偏好：现在走 token plan API 还是本机 ComfyUI。
+"""来源偏好：走 token plan API、本机 ComfyUI，还是本机 ComfyUI 但编码换成 llama.cpp。
 
 存 data/settings.json（不用数据库），.env 提供默认值；每个生成请求现读一次。
 """
@@ -9,7 +9,11 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-VALID_SOURCES: tuple[str, str] = ("api", "comfyui")
+# 三个来源（denvor 2026-11-03 定的形态）：官方接口 / 本机 ComfyUI / 本机 ComfyUI 但编码换 llama.cpp
+VALID_SOURCES: tuple[str, str, str] = ("api", "comfyui", "comfyui_llama")
+LLAMA_SOURCE = "comfyui_llama"
+# 后两个都落在本机那台 ComfyUI 上：不花额度、超时按本地算、2K 同样被 harakiri 掐 —— 判定只从这儿出一次
+LOCAL_SOURCES = ("comfyui", LLAMA_SOURCE)
 VALID_SIZES = ("480p", "720p", "1k", "2k")  # 顺序就是设置页里的顺序：小 → 大
 DEFAULT_SIZE = "1k"  # 默认档：便宜、快；低档和 2K 都要人在设置页里自己切过去
 # 低于 1K 的两档只有本机 ComfyUI 有：接口按面积分档，实测 0.31M 照样扣 58，还回一张输入尺寸的图
@@ -17,6 +21,16 @@ LOCAL_ONLY_SIZES = ("480p", "720p")
 # 反方向：2K 只有接口那条给选。本机 2K 实测 543 秒，而线上 uwsgi.ini 里 harakiri = 120，
 # 跑到两分钟就被 worker 掐了 —— 选了拿不到图，只拿到一个失败，所以这一档在本地这条按住。
 API_ONLY_SIZES = ("2k",)
+
+
+def is_local(source: str) -> bool:
+    """这条来源是不是"跑在本机、不花额度"那两条之一。
+
+    单独一个函数而不是到处写 `== "comfyui"`：第三档进来后每处漏掉一个判断，坏法都不一样 ——
+    漏在额度上会白查一次接口额度，漏在超时上会拿 API 的 300 秒去量本地，漏在回退上会让人
+    在 llama 档里被静默切到 API（花掉 58）。
+    """
+    return source in LOCAL_SOURCES
 # 给人看的档位名：低档大写会变成 480P（那是型号写法），1K / 2K 得大写才像档位
 SIZE_LABEL = {"480p": "480p", "720p": "720p", "1k": "1K", "2k": "2K"}
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
@@ -26,11 +40,11 @@ def clamp_size(source: str, size: str) -> str:
     """和来源对不上的档位一律收成默认档，两个方向都有。
 
     不这么收的话，页面写着"低档"、账上按 1K 扣 58、出的还是输入尺寸那张 —— 三个字段各说一套；
-    反方向写着 2K、本机跑九分钟、线上两分钟就被掐，拿到的是一个失败。
+    反方向写着 2K、本机跑五分钟以上（§17 实测 302.5 秒）、线上两分钟就被掐，拿到的是一个失败。
     """
     if source == "api" and size in LOCAL_ONLY_SIZES:
         return DEFAULT_SIZE
-    if source == "comfyui" and size in API_ONLY_SIZES:
+    if is_local(source) and size in API_ONLY_SIZES:
         return DEFAULT_SIZE
     return size
 
@@ -40,7 +54,7 @@ def fold_note(size: str) -> str:
     label = SIZE_LABEL.get(size, size)
     if size in LOCAL_ONLY_SIZES:
         return f"{label} 只有本机 ComfyUI 有这一档，接口那边最低就是 1K，已按 1K 存下"
-    return f"{label} 在本机 ComfyUI 这条不给选（实测九分钟，线上跑到两分钟就被掐），已按 1K 存下"
+    return f"{label} 在本机这条不给选（实测五分多钟，线上跑到两分钟就被掐），已按 1K 存下"
 
 
 @dataclass(frozen=True)

@@ -7,3 +7,4 @@ data/
 .superpowers/
 .playwright-mcp/
 __pycache__/
+tools/llama_gate/bin/
