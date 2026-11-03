@@ -1,0 +1,49 @@
+<!doctype html><meta charset="utf-8">
+<title>MIOPEN_FIND_MODE=FAST 与默认那一张</title>
+<style>
+ body{background:#14161a;color:#d8dbe0;font:15px/1.5 system-ui;margin:18px}
+ h1{font-size:17px;margin:0 0 6px} .hint{color:#9aa3ad;font-size:13px;margin-bottom:14px}
+ .box{position:relative;width:576px;max-width:100%;border:1px solid #33383f}
+ .box img{display:block;width:100%} #top{position:absolute;inset:0;clip-path:inset(0 0 0 50%)}
+ .ctl{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:12px 0}
+ input[type=range]{width:280px} label{color:#c3c8d0}
+ .pair{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+ .pair figure{margin:0} .pair figcaption{color:#9aa3ad;font-size:13px;margin-top:4px}
+ .pair img{width:283px;display:block;border:1px solid #33383f}
+ #orig{display:none} #orig.on{display:block;width:1152px} #orig.on img{width:1152px}
+</style>
+<h1>同一句指令、同一颗 seed：左边那张是默认（没开 FAST），右边那张开了 <code>MIOPEN_FIND_MODE=FAST</code></h1>
+<div class="hint">54.1% 的像素不同，单通道最大差 185。根子在 VAE 选了另一套卷积内核，
+于是 DiT 拿到的参考图 latent 就不同 —— 不是"糊了一点"，是另一张图。</div>
+<div class="ctl">
+  <label>擦除对比 <input id="wipe" type="range" min="0" max="100" value="50"></label>
+  <label><input id="blink" type="checkbox"> 闪对比（每 0.5 秒换一张）</label>
+  <label><input id="oneone" type="checkbox"> 1:1 原尺寸看</label>
+</div>
+<div class="box" id="stack">
+  <img src="default.png" alt="默认">
+  <img id="top" src="fast.png" alt="FAST">
+</div>
+<div id="orig">
+  <div class="hint">默认（没开 FAST）</div><img src="default.png">
+  <div class="hint">开了 FAST</div><img src="fast.png">
+  <div class="hint">只有大变化（通道差>16）标红，底图压暗</div><img src="where-big-changed.png">
+  <div class="hint">差异热力（|a−b| ×4，黑的地方完全没变）</div><img src="diff-heat.png">
+</div>
+<div class="pair">
+  <figure><img src="default.png"><figcaption>default.png · 没开</figcaption></figure>
+  <figure><img src="fast.png"><figcaption>fast.png · 开了</figcaption></figure>
+  <figure><img src="diff-heat.png"><figcaption>diff-heat.png · 差</figcaption></figure>
+  <figure><img src="where-big-changed.png"><figcaption>where-big-changed.png · 通道差>16 标红</figcaption></figure>
+</div>
+<script>
+const top=document.getElementById('top'),wipe=document.getElementById('wipe'),
+      blink=document.getElementById('blink'),one=document.getElementById('oneone'),
+      orig=document.getElementById('orig');
+let t=null;
+wipe.oninput=()=>{if(!blink.checked)top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`};
+blink.onchange=()=>{clearInterval(t);
+  if(blink.checked){t=setInterval(()=>{top.style.visibility=top.style.visibility==='hidden'?'visible':'hidden'},500)}
+  else{top.style.visibility='visible';top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`}};
+one.onchange=()=>orig.classList.toggle('on',one.checked);
+</script>

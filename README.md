@@ -10,6 +10,8 @@
 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`（第二个来源）、
 `docs/superpowers/specs/2026-11-01-modes-and-samples-design.md`（三个分类与 sample 图库）。
 决定暂缓但下次要接着做的，记在 `TODO.md`（llama.cpp 那三个任务与第三个生成来源的形态都在里面）。
+"改了 X 会不会换图"这类判断的**成品对照图**在 `docs/compare/`（两组：换 MIOpen 选核、换 llama.cpp 编码；
+每组一个 `index.html` 可擦除对比，判读口径写在 `docs/compare/README.md`）。
 
 ## 装与起
 

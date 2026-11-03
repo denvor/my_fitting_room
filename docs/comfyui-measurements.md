@@ -1136,9 +1136,9 @@ P3 与其余三腿都是 **54.104% 像素不同，单通道最大差 185**。
 **方法上该记的一条**（已经补进 §0）：prompt 后缀只许用来判**时间**；判**逐位**必须同一句话跨进程跑。
 我这轮先犯了前者，§21 末尾那 49%~60% 的像素差就是这么来的 —— 它比较的是四句不同的话。
 
-### 22.1 给人对着看的那几份（脚本 `/tmp/mio/make_cmp.py`，机器重启就没）
+### 22.1 给人对着看的那几份（**已归档 `docs/compare/miopen-fast/`**，脚本 `/tmp/mio/make_cmp.py` 重启就没）
 
-`/tmp/mio/compare/` 下七份，都是从 `P2-same-db.png`（没开）与 `P3-cold-fast.png`（开了）那两张来的，同一句话同一颗 seed：
+下面七份现在在仓库里，都是从 `P2-same-db.png`（没开）与 `P3-cold-fast.png`（开了）那两张来的，同一句话同一颗 seed：
 
 | 文件 | 是什么 |
 |---|---|
@@ -1196,6 +1196,7 @@ A 对应今天生产那一发的 73.2 秒，B 相当于 53.8 秒 ⇒ 表面上�
 （gguf 那份与 ComfyUI 的 safetensors 不是同一份量化 —— §18 那条"换量化必换图"仍在，
 且"残差全在权重"目前仍是推断，见 TODO T4），是生意判断，不是技术判断。
 
-**产物在 `/tmp/llama-inj/`**（重启就没）：`A-fork.png` / `B-llama.png` / `pair-fork-vs-llama.png`（并排，左 fork 右 llama）、
-`hotspot-pair.png`（袖口那块 2 倍，左 fork 右 llama）、`where-changed.png`（>16 标红、底图压暗）、
-`diff-x4.png`、`cond.pt`、`make_pt.py`、`run_t1.py`。
+**对照图已归档在 `docs/compare/llama-cond/`**（索引与判读口径见 `docs/compare/README.md`）：
+`A-fork.png` / `B-llama.png` / `pair-fork-vs-llama.png` / `hotspot-pair.png`（袖口那块 2 倍）/
+`where-changed.png`（>16 标红）/ `diff-x4.png` / `index.html`（擦除滑杆 + 闪对比 + 1:1）。
+中间产物还在 `/tmp/llama-inj/`（`cond.pt`、`make_pt.py`、`run_t1.py`），重启就没 —— 重跑方法见上面与 §19。

@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8">
+<title>llama.cpp 那份条件 vs 图里现算（实测记录 §23）</title>
+<style>
+ body{background:#14161a;color:#d8dbe0;font:15px/1.5 system-ui;margin:18px}
+ h1{font-size:17px;margin:0 0 6px} .hint{color:#9aa3ad;font-size:13px;margin-bottom:14px}
+ .box{position:relative;width:576px;max-width:100%;border:1px solid #33383f}
+ .box img{display:block;width:100%} #top{position:absolute;inset:0;clip-path:inset(0 0 0 50%)}
+ .ctl{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:12px 0}
+ input[type=range]{width:280px}
+ .pair{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+ .pair figure{margin:0} .pair figcaption{color:#9aa3ad;font-size:13px;margin-top:4px}
+ .pair img{width:283px;display:block;border:1px solid #33383f}
+ #orig{display:none} #orig.on{display:block;width:1152px} #orig.on img{width:1152px}
+ code{color:#c8b6e6}
+</style>
+<h1>同一句指令、同一颗 seed：左边 <code>A-fork</code>（图里现算条件），右边 <code>B-llama</code>（llama.cpp 那份 115 行注进去）</h1>
+<div class="hint">条件本身：逐行余弦 0.98247 / 整体 0.98080 / 相对 L2 0.203。画出来：54.0% 的像素逐位不同，
+但通道差过 16 的只占 <b>0.385%</b>，平均 0.892/255，PSNR 38.19 dB。构图是量过没动的
+（牛仔蓝掩膜质心两腿都是 (429,692)、包围盒高 1375 vs 1376）。看得出来的是抬起那只手的
+<b>袖口门襟上多了一颗金属扣</b>，以及衣纹与墙面污点各自重新长了一遍。</div>
+<div class="ctl">
+  <label>擦除对比 <input id="wipe" type="range" min="0" max="100" value="50"></label>
+  <label><input id="blink" type="checkbox"> 闪对比（0.5 秒一跳）</label>
+  <label><input id="oneone" type="checkbox"> 1:1 原尺寸看</label>
+</div>
+<div class="box"><img src="A-fork.png" alt="A-fork"><img id="top" src="B-llama.png" alt="B-llama"></div>
+<div id="orig">
+  <div class="hint">A-fork：条件在图里现算（1K 那一发 73 秒口径）</div><img src="A-fork.png">
+  <div class="hint">B-llama：条件来自 llama.cpp（图里没有 CLIPLoader，那颗 8.9 GB 全程没进显存）</div><img src="B-llama.png">
+  <div class="hint">通道差 >16 标红、底图压暗（全图只有 0.385% 被标）</div><img src="where-changed.png">
+  <div class="hint">|a−b|×4，黑的地方完全没变</div><img src="diff-x4.png">
+</div>
+<div class="pair">
+  <figure><img src="pair-fork-vs-llama.png"><figcaption>pair-fork-vs-llama.png · 缩略并排</figcaption></figure>
+  <figure><img src="hotspot-pair.png"><figcaption>hotspot-pair.png · 差异最密那块 2 倍（左 fork 右 llama）</figcaption></figure>
+  <figure><img src="where-changed.png"><figcaption>where-changed.png · 大变化标红</figcaption></figure>
+</div>
+<script>
+const top=document.getElementById('top'),wipe=document.getElementById('wipe'),
+      blink=document.getElementById('blink'),one=document.getElementById('oneone'),
+      orig=document.getElementById('orig');
+let t=null;
+wipe.oninput=()=>{if(!blink.checked)top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`};
+blink.onchange=()=>{clearInterval(t);
+  if(blink.checked){t=setInterval(()=>{top.style.visibility=top.style.visibility==='hidden'?'visible':'hidden'},500)}
+  else{top.style.visibility='visible';top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`}};
+one.onchange=()=>orig.classList.toggle('on',one.checked);
+</script>
