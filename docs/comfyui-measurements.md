@@ -2,7 +2,8 @@
 
 这份是**测量记录**，不是设计文档：只记"量到了什么数、口径是什么、哪些还没解释"。
 README 里那些耗时数的出处、可复现方法、以及跨机器/跨版本的对照都在这份里；
-规格文档看 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`。
+规格文档看 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`；
+**这 25 节的汇总与判断（动了什么、值多少秒、该不该动）在 `docs/comfyui-improvements.md`**。
 
 ## 0. 口径（照这六条复现，才对得上）
 
