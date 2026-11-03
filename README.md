@@ -9,6 +9,7 @@
 设计与实测记录：`docs/superpowers/specs/2026-10-26-qwen-tryon-design.md`（基线）、
 `docs/superpowers/specs/2026-10-27-comfyui-source-design.md`（第二个来源）、
 `docs/superpowers/specs/2026-11-01-modes-and-samples-design.md`（三个分类与 sample 图库）。
+决定暂缓但下次要接着做的，记在 `TODO.md`（llama.cpp 那三个任务与第三个生成来源的形态都在里面）。
 
 ## 装与起
 
@@ -28,6 +29,9 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
   官方那个会把负向再编一遍，而 `cfg=1.0` 下那趟根本不进采样器，纯属白烧（1K 省 44 秒、720p 省 22 秒，
   同 seed 出图逐位相同，拆法与实测见 `docs/comfyui-measurements.md` §9）。装没装，设置页的「测一下能不能连上」会点名。
   这一步不在 pip 里，**换机器 / 重装 ComfyUI 时不会自动跟着走**。
+- `comfy_nodes/qwen21_precomp_cond.py` 是第三个来源的**spike**（把外部算好的 conditioning 注进图，用来判
+  llama.cpp 那份条件画出来是什么，见 `docs/comfyui-measurements.md` §23）。应用发的图从不引用它
+  （`tryon/comfy_api.py` 里没这个类名），所以装上也不参与生产那条链。
 - **AMD 显卡那台还要设一个环境变量**：ComfyUI 在 AMD 上默认把 `torch.backends.cudnn.enabled` 设成 `False`
   （`comfy/model_management.py:486-490`，注释写的是"对 AMD 性能更好"）。在这条工作流上它正好踩中最疼的地方：
   编码节点第一层的 patch-embedding 卷积因此走 PyTorch 原生参考实现，**同一层慢 23000 倍**（16.5 秒 vs 0.7 毫秒），
