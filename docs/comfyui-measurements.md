@@ -1196,6 +1196,6 @@ A 对应今天生产那一发的 73.2 秒，B 相当于 53.8 秒 ⇒ 表面上�
 （gguf 那份与 ComfyUI 的 safetensors 不是同一份量化 —— §18 那条"换量化必换图"仍在，
 且"残差全在权重"目前仍是推断，见 TODO T4），是生意判断，不是技术判断。
 
-**产物在 `/tmp/llama-inj/`**（重启就没）：`A-fork.png` / `B-llama.png` / `side-by-side.png`（并排）、
+**产物在 `/tmp/llama-inj/`**（重启就没）：`A-fork.png` / `B-llama.png` / `pair-fork-vs-llama.png`（并排，左 fork 右 llama）、
 `hotspot-pair.png`（袖口那块 2 倍，左 fork 右 llama）、`where-changed.png`（>16 标红、底图压暗）、
 `diff-x4.png`、`cond.pt`、`make_pt.py`、`run_t1.py`。
