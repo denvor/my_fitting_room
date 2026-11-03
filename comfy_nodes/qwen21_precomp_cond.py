@@ -24,6 +24,9 @@
 """
 
 import math
+import os
+import subprocess
+import sys
 
 import torch
 
@@ -31,6 +34,37 @@ import comfy.model_management
 import comfy.utils
 import node_helpers
 from comfy_api.latest import ComfyExtension, io
+
+GATE_TIMEOUT = 600  # 一次取数：载模型约 2.6 秒 + 五段解码 5.3 秒（§19 计时），留十倍余量给冷盘
+
+
+def _encode_via_llama(images_vl, prompt, repo_root, work_dir):
+    """把**节点自己 resize 完的那几张**交给 repo 里的取数脚本，拿回 {"hidden", "image_slots"}。
+
+    像素必须由节点出、而且走 8 位 PNG 无损往返：§19 那两个余弦数（0.98247 / 0.98080）就是在这份字节上量的，
+    换成原图、换成 jpg、或者 float 直传，比出来的图差就说不清是谁贡献的了。
+    """
+    from PIL import Image
+
+    if not repo_root or not work_dir:
+        raise RuntimeError("cond_source 填了但 repo_root / work_dir 是空的 —— 不知道去哪儿找取数脚本")
+    os.makedirs(work_dir, exist_ok=True)
+    paths = []
+    for i, x in enumerate(images_vl):
+        arr = (x[0].clamp(0, 1) * 255).round().to(torch.uint8).cpu().numpy()
+        p = os.path.join(work_dir, f"img{i + 1}.png")
+        Image.fromarray(arr, "RGB").save(p)
+        paths.append(p)
+    out = os.path.join(work_dir, "cond.pt")
+    cmd = [sys.executable, os.path.join(repo_root, "tools", "llama_gate", "encode.py"),
+           "--out", out, "--work", os.path.join(work_dir, "gate"), "--prompt", prompt]
+    for p in paths:
+        cmd += ["--img", p]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=GATE_TIMEOUT)
+    if proc.returncode:
+        raise RuntimeError(f"llama.cpp 编码失败（退出码 {proc.returncode}）："
+                           f"{(proc.stderr or proc.stdout)[-500:]}")
+    return torch.load(out, map_location="cpu", weights_only=False)
 
 
 class TextEncodeQwenImage21Precomputed(io.ComfyNode):
@@ -42,7 +76,14 @@ class TextEncodeQwenImage21Precomputed(io.ComfyNode):
             category="model/conditioning/qwen image",
             is_experimental=True,
             inputs=[
-                io.String.Input("cond_path", advanced=True, tooltip="外部算好的 [1,115,4096] .pt（pre-norm）"),
+                io.String.Input("cond_path", advanced=True, default="",
+                                tooltip="外部算好的 [1,115,4096] .pt（pre-norm）。填了就直接用它（§23 那条路）。"),
+                io.String.Input("cond_source", advanced=True, default="",
+                                tooltip="留空 = 只读 cond_path。填任意值 = 现场调 llama.cpp 算（走 repo 里的 tools/llama_gate/encode.py）。"),
+                io.String.Input("repo_root", advanced=True, default="/home/denvor/work/qwen-image",
+                                tooltip="取数脚本与权重路径的出处，换机器改这一处。"),
+                io.String.Input("work_dir", advanced=True, default="/tmp/llama-cond",
+                                tooltip="中转的 PNG、meta、cond.pt 都落这儿（几百 MB 级，用前确认盘）。"),
                 io.String.Input("prompt", multiline=True, dynamic_prompts=True,
                                 tooltip="本节点不编码它，只让它进缓存键：换一句就得重跑，别拿命中当免单。"),
                 io.String.Input("negative_prompt", multiline=True, dynamic_prompts=True,
@@ -70,9 +111,12 @@ class TextEncodeQwenImage21Precomputed(io.ComfyNode):
 
     @classmethod
     def execute(cls, cond_path, prompt, negative_prompt, vae=None, resolution=0,
-                cond_dtype="float32", images: io.Autogrow.Type = None) -> io.NodeOutput:
-        del prompt, negative_prompt  # 只进缓存键，不参与计算（cfg=1 时负向本来就不进采样器）
+                cond_dtype="float32", cond_source="", repo_root="", work_dir="",
+                images: io.Autogrow.Type = None) -> io.NodeOutput:
+        del negative_prompt  # cfg=1 时负向本来就不进采样器
+        # prompt 在 cond_source 为空时也只进缓存键；非空时它是送去编码的那句原文
         ref_latents = []
+        images_vl = []
         latent_w = latent_h = resolution or 1024
         images = images or {}
         for name in sorted(images, key=lambda n: int(n.rsplit("_", 1)[-1])):
@@ -94,10 +138,17 @@ class TextEncodeQwenImage21Precomputed(io.ComfyNode):
                 s = comfy.utils.common_upscale(samples, width, height, "lanczos", "disabled").movedim(1, -1)
             if not ref_latents:
                 latent_w, latent_h = width, height
+            rgb = s[:, :, :, :3]
+            if s.shape[-1] > 3:
+                rgb = rgb * s[:, :, :, 3:] + (1.0 - s[:, :, :, 3:])  # 视觉塔看的是"alpha 叠在白底上"，VAE 保留四通道
+            images_vl.append(rgb)
             if vae is not None:
                 ref_latents.append(vae.encode(s))
 
-        blob = torch.load(cond_path, map_location="cpu", weights_only=False)
+        if cond_source.strip():
+            blob = _encode_via_llama(images_vl, prompt, repo_root, work_dir)
+        else:
+            blob = torch.load(cond_path, map_location="cpu", weights_only=False)
         hidden = blob["hidden"].to(getattr(torch, cond_dtype))
         extra = {"pooled_output": None, "image_slots": list(blob["image_slots"])}
         positive = [[hidden, extra]]

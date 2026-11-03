@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8">
+<title>fork 现算条件 vs llama.cpp 现取条件（实测记录 §24，干净的那一对）</title>
+<style>
+ body{background:#14161a;color:#d8dbe0;font:15px/1.5 system-ui;margin:18px}
+ h1{font-size:17px;margin:0 0 6px} .hint{color:#9aa3ad;font-size:13px;margin-bottom:14px}
+ .box{position:relative;width:576px;max-width:100%;border:1px solid #33383f}
+ .box img{display:block;width:100%} #top{position:absolute;inset:0;clip-path:inset(0 0 0 50%)}
+ .ctl{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:12px 0}
+ input[type=range]{width:280px}
+ .pair{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
+ .pair figure{margin:0} .pair figcaption{color:#9aa3ad;font-size:13px;margin-top:4px}
+ .pair img{width:283px;display:block;border:1px solid #33383f}
+ code{color:#c8b6e6}
+</style>
+<h1>同一句指令、同一颗 seed、<b>同一对输入像素</b>：左 <code>A-fork</code>（8B 在图里算），右 <code>C-live</code>（llama.cpp 现取那 115 行）</h1>
+<div class="hint">这一对才是干净的 T1 对照。§23 那一对（<code>index.html</code>）里离线腿的条件是从<b>原始记录文件</b>切的，
+而生产的输入是 <code>prepare_upload</code> 之后的图 —— 两边的输入差着 ±1 级（人像平均 0.94/255、衣服 1.09，最大 18）。
+本对的判读：56.69% 像素逐位不同，通道差过 16 的占 <b>0.330%</b>、过 32 占 0.138%，平均 0.891/255，PSNR 38.40 dB。
+结论与 §23 一致（同构图、细节级），数字几乎没变（那边 0.385% / 38.19 dB）—— 混杂是真实存在的，只是没改变结论。</div>
+<div class="ctl">
+  <label>擦除对比 <input id="wipe" type="range" min="0" max="100" value="50"></label>
+  <label><input id="blink" type="checkbox"> 闪对比（0.5 秒一跳）</label>
+</div>
+<div class="box"><img src="A-fork.png" alt="A-fork"><img id="top" src="C-live.png" alt="C-live"></div>
+<div class="pair">
+  <figure><img src="pair-fork-vs-llama-live.png"><figcaption>pair-fork-vs-llama-live.png · 缩略并排</figcaption></figure>
+  <figure><img src="hotspot-fork-vs-live.png"><figcaption>hotspot-fork-vs-live.png · 差异最密那块 2 倍</figcaption></figure>
+  <figure><img src="where-fork-vs-live.png"><figcaption>where-fork-vs-live.png · 通道差 >16 标红</figcaption></figure>
+  <figure><img src="diff-fork-vs-live-x4.png"><figcaption>diff-fork-vs-live-x4.png · |a−b|×4</figcaption></figure>
+</div>
+<script>
+const top=document.getElementById('top'),wipe=document.getElementById('wipe'),blink=document.getElementById('blink');
+let t=null;
+wipe.oninput=()=>{if(!blink.checked)top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`};
+blink.onchange=()=>{clearInterval(t);
+  if(blink.checked){t=setInterval(()=>{top.style.visibility=top.style.visibility==='hidden'?'visible':'hidden'},500)}
+  else{top.style.visibility='visible';top.style.clipPath=`inset(0 0 0 ${wipe.value}%)`}};
+</script>
