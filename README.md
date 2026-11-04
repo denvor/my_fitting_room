@@ -20,6 +20,9 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 .venv/bin/python dev_run.py
 ```
 
+远端部署（应用与 ComfyUI 不在同一台）时，`.env` 模板在 `.env.remote.sample` ——
+第 3 档那三条路径填的是 **ComfyUI 那台**的路径，模板里写了为什么不能填远端这台的。
+
 - 本机打开 `http://127.0.0.1:8000`，局域网设备用本机 IP 加 `:8000`（服务绑 `0.0.0.0`，同网络内任何设备都能访问，所以放公网前先看下面「登录」一节）。
 - 接口地址、密钥、模型名从 `.env` 读：`OPENAI_URL`、`API_KEY`、`MODEL`。图像生成地址由 `OPENAI_URL` 去掉结尾的 `/compatible-mode/v1` 再接 `/api/v1/services/aigc/multimodal-generation/generation` 推导出来。
 - 可选项：`TRYON_SOURCE`（`api` / `comfyui` / `comfyui_llama`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
