@@ -34,6 +34,8 @@ class Settings:
     # 二进制不能跨机器搬：RUNPATH 指向那台的 llama.cpp 构建，换机器要在那台重跑 tools/llama_gate/build.sh。
     llama_repo_root: str = str(PROJECT_ROOT)
     llama_work_dir: str = str(PROJECT_ROOT / "data" / "llama-gate")
+    # ComfyUI 在远端时设 True（.env 的 TRYON_LLAMA_REMOTE）：二进制在那一台，应用查的是自己的文件系统
+    llama_remote: bool = False
 
     @property
     def llama_ready(self) -> bool:
@@ -41,9 +43,15 @@ class Settings:
 
         查在场而不是查配置，是因为那一档依赖一个手编的二进制（打了本地补丁的 llama.cpp 的产物，TODO.md T3）：
         路径填对了但没编译，用户切过去只会拿到一句看不出来根的"ComfyUI 报错"。
+
+        **异机时（llama_remote）不查文件**：二进制在 ComfyUI 那台，应用查的是自己的文件系统、查不到。
+        这时信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台跑，`run_gate` 会报"取数程序不在：…"
+        （那句是人话，不是"ComfyUI 报错"）。
         """
         if not (self.llama_repo_root and self.llama_work_dir):
             return False
+        if self.llama_remote:
+            return True
         return os.path.isfile(os.path.join(self.llama_repo_root, "tools", "llama_gate", "bin", "dump_hidden"))
 
 
@@ -106,4 +114,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     for field, key in (("llama_repo_root", "TRYON_LLAMA_REPO_ROOT"), ("llama_work_dir", "TRYON_LLAMA_WORK_DIR")):
         if values.get(key):
             base = replace(base, **{field: values[key]})
+    # ComfyUI 在远端时应用查不到二进制（在那一台），llama_ready 改成信配置
+    if values.get("TRYON_LLAMA_REMOTE", "").lower() in ("1", "true", "yes"):
+        base = replace(base, llama_remote=True)
     return base

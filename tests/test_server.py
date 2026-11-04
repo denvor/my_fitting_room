@@ -65,15 +65,19 @@ COMFY_URL = "http://127.0.0.1:8188"
 GATE_REL = Path("tools") / "llama_gate" / "bin" / "dump_hidden"   # 第 3 档的"装好了"就看这个在不在
 
 
-def llama_settings(root, *, built: bool) -> Settings:
-    """把第 3 档的两条部署路径指到 tmp：不让测试结果跟着开发者自己编没编二进制变。"""
+def llama_settings(root, *, built: bool, remote: bool = False) -> Settings:
+    """把第 3 档的两条部署路径指到 tmp：不让测试结果跟着开发者自己编没编二进制变。
+
+    remote=True 表示"ComfyUI 在远端"——二进制在那一台，应用查的是自己的文件系统，查不到。
+    """
     from dataclasses import replace
 
     if built:
         (root / GATE_REL).parent.mkdir(parents=True, exist_ok=True)
         (root / GATE_REL).write_bytes(b"\x7fELF")
     return replace(Settings(endpoint="https://example.test/generation", api_key="k", model="m"),
-                   llama_repo_root=str(root), llama_work_dir=str(root / "gate-work"))
+                   llama_repo_root=str(root), llama_work_dir=str(root / "gate-work"),
+                   llama_remote=remote)
 
 
 def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k", **_ignored) -> Generation:
@@ -550,6 +554,17 @@ def test_没编取数程序时第三档要说清去编译而不是让人点了�
     assert client.get("/api/settings").get_json()["llama_ready"] is False
     r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
     assert r.status_code == 400 and "编译" in r.get_json()["message"]
+
+
+def test_异机时第三档信配置不查本地文件(make, tmp_path):
+    """应用与 ComfyUI 异机时，二进制在 ComfyUI 那台，应用查的是自己的文件系统、查不到。
+    这时只能信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台报"取数程序不在"。"""
+    client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, built=False, remote=True))
+
+    body = client.get("/api/settings").get_json()
+    assert body["llama_ready"] is True
+    r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
+    assert r.status_code == 200 and r.get_json()["source"] == "comfyui_llama"
 
 
 def test_第三档把编码节点与两个路径递下去(make, tmp_path):
