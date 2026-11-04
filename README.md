@@ -25,7 +25,8 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
 - 可选项：`TRYON_SOURCE`（`api` / `comfyui` / `comfyui_llama`，**缺省 `comfyui`**）、`COMFY_URL`（缺省 `http://127.0.0.1:8188`）、
   `TRYON_PASSWORD`（登录口令，缺省为空 = 不设登录）、`TRYON_COOKIE_SECURE`（`1` = 登录 cookie 只走 HTTPS）、
   `TRYON_SIZE`（`480p` / `720p` / `1k` / `2k`，**缺省 `1k`**）、
-  `TRYON_LLAMA_REPO_ROOT` / `TRYON_LLAMA_WORK_DIR`（第三个来源的两条路径，缺省就是本 repo 与 `data/llama-gate`）。
+  `TRYON_LLAMA_REPO_ROOT` / `TRYON_LLAMA_WORK_DIR`（第三个来源的两条路径，缺省就是本 repo 与 `data/llama-gate`；
+  **这两条是 ComfyUI 那台机器上的路径**，异机部署要填 ComfyUI 那台的，不是应用这台的）。
   这几个只是默认值，设置页里存的值优先。
 - **走本机 ComfyUI 这条（也就是缺省来源）要多装一个节点**：把 `comfy_nodes/qwen21_posonly_encode.py` 拷进
   ComfyUI 的 `custom_nodes/` 目录，然后**重启 ComfyUI** —— 自定义节点只在启动时加载。图里发的编码节点就是它：
@@ -34,8 +35,11 @@ uv pip install --python .venv/bin/python -r requirements.txt   # 或任意 pip i
   这一步不在 pip 里，**换机器 / 重装 ComfyUI 时不会自动跟着走**。
 - **第三个来源 `comfyui_llama`（编码换 llama.cpp）要多装两样东西**：把 `comfy_nodes/qwen21_precomp_cond.py`
   拷进 ComfyUI 的 `custom_nodes/` 并**重启 ComfyUI**，再编译一个取数程序
-  `tools/llama_gate/bin/dump_hidden`（命令写在 `tools/llama_gate/dump_hidden.cpp` 头部，而且它要求
-  `~/work/llama/llama.cpp` 那份 `qwen3vl.cpp` 的本地补丁还在 —— 没补丁拿不到 pre-norm 那份出口）。
+  `tools/llama_gate/bin/dump_hidden`（跑 `tools/llama_gate/build.sh`，一条命令；它要求那台的
+  `~/work/llama/llama.cpp` 那份 `qwen3vl.cpp` 的本地补丁 —— 没补丁拿不到 pre-norm 那份出口）。
+  二进制**必须在 ComfyUI 那台机器上编**：RUNPATH 指向那台的 llama.cpp 构建，拷到别的机器跑不起来。
+  应用与 ComfyUI 同机时这样就行；异机还要用 `TRYON_LLAMA_REPO_ROOT` / `TRYON_LLAMA_WORK_DIR`
+  把路径指向 ComfyUI 那台（见上面「可选项」那行）。
   两样都在，设置页里那一档才给点；少任何一样，页面会按住它并说什么缺失（判定在 `Settings.llama_ready`）。
   它**不是逐位复现的那条**：同 seed 同输入出的是同构图的另一个细节版本（`>16` 的像素占 0.330%、PSNR 38.40，
   对照图与判读见 `docs/compare/llama-cond/index-live.html` 和测量文档 §23 / §24）。
