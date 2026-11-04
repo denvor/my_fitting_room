@@ -10,7 +10,8 @@
 //  3) 媒体标记来自 mtmd_context_params.media_marker（本机这版默认 "<__media__>"）；
 //     prompt 里标记数必须等于 bitmap 数，否则 mtmd_tokenize 返回 1。
 //
-// 编译（b12073 = 从源码建的 ROCm 版，库在 build/bin）：
+// 编译：换机器直接跑 `tools/llama_gate/build.sh`（打补丁 + 编库 + 编这个二进制，一条命令）。
+// 下面是它内部执行的那条 g++（库在 llama.cpp 的 build/bin，ROCm 版）：
 //   cd ~/work/llama/llama.cpp && g++ -O1 -std=c++17 \
 //     -I include -I ggml/include -I tools/mtmd -I src \
 //     ~/work/qwen-image/tools/llama_gate/dump_hidden.cpp \

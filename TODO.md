@@ -24,9 +24,11 @@
   - 已知的半边：§18 用 Vulkan b12063（`~/work/llama/llama-vulkan`），§19 用源码建的 ROCm b12073
     （`~/work/llama/llama.cpp/build/bin`），两次的分段边界完全一致，所以数值差可直接算，只缺一次并排跑。
 - [ ] **T3 那份 +15 行本地补丁的去留**
-  - `~/work/llama/llama.cpp/src/models/qwen3vl.cpp` 现在是**未提交**状态，`build/` 是我用他的 `build.sh`
-    重编出来的。要么留（在那文件顶部补一行"本地补丁"说明，写明只有 `embeddings_layer_inp[n_layer]`
-    被请求时才改图），要么 `git checkout` + 重编回到原样。这个决定在他那边，不在本项目里。
+  - 补丁内容已归档：`tools/llama_gate/qwen3vl-prenorm.patch`（从 `git diff` 生成，在原始版本上 apply 后
+    与本机逐字相同）；编译收成 `tools/llama_gate/build.sh`（打补丁 + 编库 + 编二进制，换机器一条命令）。
+  - 但 `~/work/llama/llama.cpp/src/models/qwen3vl.cpp` 仍是**未提交**状态，`build/` 是拿它编的。
+    要么留（补丁自己写明了"只有 `embeddings_layer_inp[n_layer]` 被请求时才改图"），要么 `git checkout` +
+    重编回到原样。这个决定在他那边，不在本项目里。
 - [ ] **T4 同权重的 gguf，把"差在实现还是差在权重"真正分开**
   - 现在的残差**归因是推断不是测量**：llama 侧是 unsloth 的 `Qwen3-VL-8B-Instruct-1M-UD-Q8_K_XL`，
     ComfyUI 侧是 `qwen3vl_8b_int8_convrot.safetensors`，两边量化方案不同。

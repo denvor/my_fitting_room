@@ -1,0 +1,33 @@
+diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
+index 8c06dccca..a8a51d7da 100644
+--- a/src/models/qwen3vl.cpp
++++ b/src/models/qwen3vl.cpp
+@@ -81,6 +81,16 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     ggml_tensor * inp_out_ids = build_inp_out_ids();
+ 
++    // 本地补丁（给 qwen-image 试衣间那条工作流用的，2026-11-03）：
++    // 把"最后一层之后、最终 RMSNorm 之前"那份 hidden state 也挂成可取出的输出。
++    // 要它是因为 ComfyUI 的 Qwen Image 2.1 条件向量取的就是这一份
++    // （comfy/text_encoders/qwen_image21.py:34 的 layer_norm_hidden_state=False），
++    // 而 llama.cpp 默认导出的 t_embd 是 build_norm 之后的那一份（本文件下方第 165-170 行）。
++    // 没请求 embeddings_layer_inp[n_layer] 时这个开关恒为 false，图与打补丁前逐字相同。
++    // 取法见 llama-ext.h 的 llama_set/get_embeddings_layer_inp，调用例 /tmp/q3vl-gate/dump_hidden.cpp
++    const bool extract_final_inp = (size_t) n_layer < cparams.embeddings_layer_inp.size() &&
++                                   cparams.embeddings_layer_inp[n_layer];
++
+     for (int il = 0; il < n_layer; ++il) {
+         ggml_tensor * inpSA = inpL;
+ 
+@@ -162,6 +172,11 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+ 
+     cur = inpL;
+ 
++    if (extract_final_inp) {  // 本地补丁：pre-norm 那份也留在图上，能被取出来
++        res->t_layer_inp[n_layer] = cur;
++        ggml_build_forward_expand(gf, res->t_layer_inp[n_layer]);
++    }
++
+     cur = build_norm(cur,
+             model.output_norm, NULL,
+             LLM_NORM_RMS, -1);
