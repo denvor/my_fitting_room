@@ -1,16 +1,16 @@
-"""直调取数二进制、在自己进程里切行 —— llama.cpp 那一档的客户端。
+"""连取数服务拿条件张量 —— llama.cpp 那一档的客户端。
 
-为什么要有这一层而不是让节点去起 `encode.py`：**节点本来就跑在 ComfyUI 进程里，torch 早就 import 好了**，
-而 §24 那条路是 ComfyUI → python 子进程 → C++ 子进程，光"再起一个 python"就白交 2.4 秒
-（实测：起解释器 + `import torch` 0.7 + `import comfy.text_encoders.qwen_image21` 1.3，见 §25）。
+链路：`run_gate()` 把图 + 指令发过 Unix socket → 服务端解算并切行 → 拿回 `[1,115,4096]` 的 pre-norm 条件。
+服务是常驻的（`tools/llama_gate/llama_gate.cpp`，systemd 管），所以每发省掉"起进程 + 载 8.9 GB 模型"
+的 1.44 秒（§25.1 分段计时）。
 
-链路：`run_gate()` 跑二进制拿 `pre.bin` + `meta.json` → `gate_layout()` 对账拿行号 → 按行读出条件。
-pre-norm 的理由、行算术的出处都和 §19/§24 一样，这儿不重讲（见 `keep_rows.py` 与 dump_hidden.cpp 头注释）。
+为什么节点不自己去起 `encode.py`：**节点本来就跑在 ComfyUI 进程里，torch 早就 import 好了**，
+而起一个 python 子进程光 import 就白交 2.4 秒（实测见 §25）。
+
+pre-norm 的理由、行算术的出处都和 §19/§24 一样，这儿不重讲（见 `keep_rows.py` 与 llama_gate.cpp 头注释）。
 """
 
-import json
 import os
-import subprocess
 from pathlib import Path
 
 from tools.llama_gate.keep_rows import kept_row_index
@@ -60,46 +60,49 @@ def gate_layout(meta: dict, byte_size: int) -> tuple[list[int], list[int]]:
     return idx, slots
 
 
-def run_gate(images: list[str], prompt: str, out_dir: str, gate_bin: str | None = None,
-             gguf: str = GGUF, mmproj: str = MMPROJ, want_post: bool = False,
-             timeout: int = GATE_TIMEOUT) -> dict:
-    """跑一次取数程序，返回 meta（`pre.bin` 落在 out_dir 下；`_dir` 一并塞进返回值，下游不用再猜目录）。
+DEFAULT_SOCK = "/run/llama-gate/gate.sock"
 
-    `want_post` 默认关：DiT 要的是**没过最终 RMSNorm** 的那份（`comfy/text_encoders/qwen_image21.py:34`
-    的 `layer_norm_hidden_state=False`），post.bin 一次 45 MB，写了没人读。
+
+def run_gate(images: list[str], prompt: str, sock: str | None = None,
+             flags: int = 0, timeout: int = GATE_TIMEOUT) -> tuple["object", list[int]]:
+    """连取数服务，发图 + 指令，拿回 (hidden [1,N,n_embd], image_slots)。
+
+    服务不在时报一句人话（现场要的是"去看 systemctl status"，不是 ConnectionRefusedError）。
+    切行在服务端做，客户端拿到的就是采样器真正吃的那 115 行。
     """
-    gate_bin = gate_bin or resolve_gate_bin()
-    if not os.path.isfile(gate_bin):
-        raise RuntimeError(f"取数程序不在：{gate_bin}。照 tools/llama_gate/dump_hidden.cpp 头部那行 g++ 命令，"
-                           f"在打了本地补丁的 llama.cpp（{LLAMA_ROOT}）里编译一个出来")
-    out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    pfile = out / "prompt.txt"
-    pfile.write_text(prompt, encoding="utf-8")
-    cmd = [gate_bin, "-m", gguf, "--mmproj", mmproj, "--prompt", str(pfile), "--out", str(out)]
-    if not want_post:
-        cmd.append("--no-post")
-    for img in images:
-        cmd += ["--img", img]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if proc.returncode:
-        raise RuntimeError(f"取数程序退出码 {proc.returncode}：{proc.stderr[-600:]}")
-    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
-    meta["_dir"] = str(out)
-    return meta
+    import socket
 
+    from tools.llama_gate.protocol import decode_response, encode_request
 
-def cond_from_meta(meta: dict):
-    """pre.bin + meta → (hidden [1,N,n_embd] torch 张量, image_slots)。
+    sock = sock or os.environ.get("LLAMA_GATE_SOCK") or DEFAULT_SOCK
 
-    按行取而不是整块搬：全序列 2865 行 × 4096 是 45 MB，要留的只有 115 行（1.9 MB）。
-    这几行读盘代码没进单测（项目 `.venv` 里没有 torch/numpy），改由真机逐位验证盯 ——
-    它必须还原出与 §24 那份 `cond.pt` 一字不差的张量，见实测记录 §25。
-    """
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    conn.settimeout(timeout)
+    try:
+        conn.connect(sock)
+    except OSError as e:
+        raise RuntimeError(
+            f"取数服务不在（{sock}）：{e.strerror or e}。先看 systemctl status llama-gate"
+        ) from e
+    payload = encode_request([Path(p).read_bytes() for p in images], prompt, flags)
+    try:
+        conn.sendall(payload)
+        chunks = []
+        while True:
+            b = conn.recv(1 << 20)
+            if not b:
+                break
+            chunks.append(b)
+    finally:
+        conn.close()
+
+    # numpy/torch 只在真要组装张量时才 import：项目 `.venv` 里没有它们（节点跑在 ComfyUI 进程里才有），
+    # 而"连不上服务"这条路径不该被它们挡住
     import numpy as np
     import torch
 
-    path = Path(meta["_dir"]) / "pre.bin"
-    idx, slots = gate_layout(meta, path.stat().st_size)
-    pre = np.memmap(path, dtype=np.float32, mode="r", shape=(int(meta["total_rows"]), int(meta["n_embd"])))
-    return torch.from_numpy(np.ascontiguousarray(pre[idx])).unsqueeze(0), slots
+    status, rows, n_embd, slots, tensor, _ = decode_response(
+        b"".join(chunks), want_debug=bool(flags & 1)
+    )
+    hidden = torch.from_numpy(np.frombuffer(tensor, dtype=np.float32).copy()).reshape(1, rows, n_embd)
+    return hidden, slots

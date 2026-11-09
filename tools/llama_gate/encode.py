@@ -15,12 +15,11 @@
 import argparse
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # 仓库根，好 import tools.llama_gate.*
 
-from tools.llama_gate.gate_client import GGUF, MMPROJ, cond_from_meta, run_gate  # noqa: E402,F401
+from tools.llama_gate.gate_client import run_gate  # noqa: E402,F401
 from tools.llama_gate.prompt_build import media_prompt  # noqa: E402,F401 —— re-export：老调用方还从这儿拿
 
 
@@ -30,11 +29,8 @@ def main() -> int:
     ap.add_argument("--prompt", required=True, help="用户指令原文（不含模板）")
     ap.add_argument("--out", required=True, help="输出 .pt 路径")
     ap.add_argument("--comfy-root", default="/home/denvor/work/ComfyUI")
-    ap.add_argument("--gate-bin", default=None, help="默认 repo 里的 tools/llama_gate/bin/dump_hidden")
-    ap.add_argument("--gguf", default=GGUF)
-    ap.add_argument("--mmproj", default=MMPROJ)
-    ap.add_argument("--work", default="", help="取数程序的输出目录，默认临时目录")
-    ap.add_argument("--post", action="store_true", help="连 post.bin（过了最终 RMSNorm 的那份）一起写，研究时对照用")
+    ap.add_argument("--sock", default=None, help="取数服务的 socket，默认 /run/llama-gate/gate.sock")
+    ap.add_argument("--debug", action="store_true", help="要全序列 + meta（离线判读用），不是切好的 115 行")
     ap.add_argument("--dry-run", action="store_true", help="只打印拼出来的提示，不跑模型")
     a = ap.parse_args()
 
@@ -45,17 +41,15 @@ def main() -> int:
     if a.dry_run:
         print(prompt)
         return 0
-    work = a.work or tempfile.mkdtemp(prefix="llama-gate-")
-    meta = run_gate(a.img, prompt, work, a.gate_bin, a.gguf, a.mmproj, want_post=a.post)
-    hidden, slots = cond_from_meta(meta)
+    from tools.llama_gate.protocol import FLAG_DEBUG
+
+    hidden, slots = run_gate(a.img, prompt, sock=a.sock, flags=FLAG_DEBUG if a.debug else 0)
     import torch
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"hidden": hidden, "image_slots": slots,
-                "provenance": {"行算术": "tools/llama_gate/keep_rows.py", "段数": len(meta["chunks"]),
-                               "总行数": meta["total_rows"], "补丁取的层": meta.get("补丁取的层")}}, a.out)
-    print(json.dumps({"out": a.out, "形状": list(hidden.shape), "image_slots": slots,
-                      "work": work}, ensure_ascii=False))
+                "provenance": {"行算术": "tools/llama_gate/llama_gate.cpp"}}, a.out)
+    print(json.dumps({"out": a.out, "形状": list(hidden.shape), "image_slots": slots}, ensure_ascii=False))
     return 0
 
 

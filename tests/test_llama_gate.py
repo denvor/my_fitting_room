@@ -136,45 +136,12 @@ def test_一行都没丢掉要报错():
         gate_layout(bare, 4 * N_EMBD * 4)
 
 
-def test_run_gate默认带上no_post(tmp_path, monkeypatch):
-    """DiT 只要 pre-norm 那份；post.bin 一次 45 MB，写了没人读。"""
-    seen = []
-
-    def fake_run(cmd, **kwargs):
-        seen.append(cmd)
-        (tmp_path / "meta.json").write_text('{"n_embd": 3, "total_rows": 1, "chunks": []}')
-        return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    run_gate(["a.png"], "文本", str(tmp_path), gate_bin="/bin/true", gguf="m", mmproj="p")
-    assert "--no-post" in seen[0]
-    seen.clear()
-    run_gate(["a.png"], "文本", str(tmp_path), gate_bin="/bin/true", gguf="m", mmproj="p", want_post=True)
-    assert "--no-post" not in seen[0]
-
-
-def test_二进制默认落在repo的bin里而不是tmp(monkeypatch):
-    """/tmp 里的产物重启就没：调用方是 ComfyUI 节点，机器一重启就找不到取数程序。"""
-    monkeypatch.delenv("LLAMA_GATE_BIN", raising=False)
-    p = resolve_gate_bin()
-    assert p.endswith("tools/llama_gate/bin/dump_hidden")
-
-
-def test_环境变量能指定另一个二进制(monkeypatch):
-    monkeypatch.setenv("LLAMA_GATE_BIN", "/opt/gate/dump_hidden")
-    assert resolve_gate_bin() == "/opt/gate/dump_hidden"
-
-
-def test_二进制不在时报错要说清怎么编出来(monkeypatch):
-    """换机器、或者刚 git clean 掉 bin/ —— 现场只有一句"没有那个文件"的话，没人知道要去编译。"""
-    monkeypatch.setenv("LLAMA_GATE_BIN", "/definitely/not/here/dump_hidden")
-
-    def refuse(*args, **kwargs):
-        raise AssertionError("二进制不在就不该把子进程起起来")
-
-    monkeypatch.setattr("subprocess.run", refuse)
-    with pytest.raises(RuntimeError, match="编译"):
-        run_gate(["a.png"], "文本", "/tmp/whatever")
+def test_连不上服务时报人话(tmp_path):
+    """服务没起（或者崩了）时，现场要的是"去看 systemctl status"，不是 ConnectionRefusedError。"""
+    with pytest.raises(RuntimeError) as e:
+        run_gate(["a.png"], "文本", sock=str(tmp_path / "nope.sock"))
+    assert "取数服务不在" in str(e.value)
+    assert "systemctl status llama-gate" in str(e.value)
 
 
 # --- 常驻服务的帧（Task 1）-------------------------------------------------
