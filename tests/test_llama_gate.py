@@ -197,9 +197,26 @@ def test_响应帧解出张量与槽位():
     tensor = b"\x00" * (2 * 3 * 4)          # rows × n_embd × float32
     blob = (b"LGAT" + bytes([0]) + (2).to_bytes(4, "little") + (3).to_bytes(4, "little")
             + bytes([2]) + (8).to_bytes(4, "little") + (14).to_bytes(4, "little") + tensor)
-    assert decode_response(blob) == (0, 2, 3, [8, 14], tensor)
+    assert decode_response(blob) == (0, 2, 3, [8, 14], tensor, b"")
+
+
+def test_debug帧回全序列与meta():
+    """离线判读（§19/§23/§24 那套）要的是全序列 + meta.json，不是切好的 115 行。"""
+    meta = '{"n_embd":4096,"chunks":[]}'.encode()
+    tensor = b"\x00" * (2 * 3 * 4)
+    blob = (b"LGAT" + bytes([0]) + (2).to_bytes(4, "little") + (3).to_bytes(4, "little")
+            + bytes([0]) + len(meta).to_bytes(4, "little") + meta + tensor)
+    assert decode_response(blob, want_debug=True) == (0, 2, 3, [], tensor, meta)
 
 
 def test_响应帧短了要报错():
     with pytest.raises(ValueError):
         decode_response(b"LGAT\x00\x01")
+
+
+def test_错误帧把服务端那句人话带回来():
+    """status != 0 时，帧里带的是给人看的原因（比如"媒体标记数要与图数相等"），不能只报"帧短了"。"""
+    msg = "mtmd_tokenize 返回 1（媒体标记数要与图数相等）".encode()
+    blob = b"LGAT" + bytes([1]) + len(msg).to_bytes(4, "little") + msg
+    with pytest.raises(ValueError, match="媒体标记数要与图数相等"):
+        decode_response(blob)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 编 dump_hidden —— llama.cpp 那一档的取数程序。
+# 编 llama-gate —— llama.cpp 那一档的取数服务（常驻，systemd 管）。
 #
-# 为什么要有这个脚本：这三步原先散在两个地方（llama.cpp 的 build.sh + dump_hidden.cpp 头部的
+# 为什么要有这个脚本：这几步原先散在两个地方（llama.cpp 的 build.sh + 源文件头部的
 # g++ 命令），换机器时靠人记。而补丁本身**没进 llama.cpp 的 git**（未提交），一次 git checkout
 # 就没了，编译产物却还在 —— 直到跑一次才发现图变了，而且不报错、只是静默画错。
 #
@@ -13,15 +13,15 @@
 # 环境变量：
 #   LLAMA_ROOT   llama.cpp 检出位置，默认 ~/work/llama/llama.cpp
 #
-# 编出来的 dump_hidden 不是自包含的：RUNPATH 指向 $LLAMA_ROOT/build/bin，那儿的 libllama /
-# libmtmd / libggml 被删或挪走，节点就报"取数程序退出码 …"。
+# 编出来的 llama-gate 不是自包含的：RUNPATH 指向 $LLAMA_ROOT/build/bin，那儿的 libllama /
+# libmtmd / libggml 被删或挪走，服务就打不起来。
 
 set -euo pipefail
 
 LLAMA_ROOT="${LLAMA_ROOT:-$HOME/work/llama/llama.cpp}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PATCH="$REPO_ROOT/tools/llama_gate/qwen3vl-prenorm.patch"
-OUT_BIN="$REPO_ROOT/tools/llama_gate/bin/dump_hidden"
+OUT_BIN="$REPO_ROOT/tools/llama_gate/bin/llama-gate"
 
 SKIP_LIB=0
 REBUILD_LIB=0
@@ -85,12 +85,12 @@ else
     echo "[2/3] 库已在且比源码新（$LIB），跳过（--rebuild-lib 强制重编）"
 fi
 
-# --- 3. 编 dump_hidden ---
-echo "[3/3] 编 dump_hidden"
+# --- 3. 编 llama-gate ---
+echo "[3/3] 编 llama-gate"
 mkdir -p "$REPO_ROOT/tools/llama_gate/bin"
 g++ -O1 -std=c++17 \
     -I include -I ggml/include -I tools/mtmd -I src \
-    "$REPO_ROOT/tools/llama_gate/dump_hidden.cpp" \
+    "$REPO_ROOT/tools/llama_gate/llama_gate.cpp" \
     -L "$LLAMA_ROOT/build/bin" -lllama -lmtmd -Wl,-rpath,"$LLAMA_ROOT/build/bin" \
     -o "$OUT_BIN"
 echo "产物：$OUT_BIN"
