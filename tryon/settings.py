@@ -1,6 +1,5 @@
 """从 .env 读取接口地址、密钥和模型名。"""
 
-import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -34,25 +33,36 @@ class Settings:
     # 二进制不能跨机器搬：RUNPATH 指向那台的 llama.cpp 构建，换机器要在那台重跑 tools/llama_gate/build.sh。
     llama_repo_root: str = str(PROJECT_ROOT)
     llama_work_dir: str = str(PROJECT_ROOT / "data" / "llama-gate")
-    # ComfyUI 在远端时设 True（.env 的 TRYON_LLAMA_REMOTE）：二进制在那一台，应用查的是自己的文件系统
+    # 取数服务的 socket（.env 的 TRYON_LLAMA_GATE_SOCK）
+    llama_gate_sock: str = "/run/llama-gate/gate.sock"
+    # ComfyUI 在远端时设 True（.env 的 TRYON_LLAMA_REMOTE）：服务在那一台，应用连的是自己的机器
     llama_remote: bool = False
 
     @property
     def llama_ready(self) -> bool:
-        """第 3 档在这台机上成不成立：两条路径都有，而且**取数二进制真在场**。
+        """第 3 档在这台机上成不成立：**取数服务连不连得上**。
 
-        查在场而不是查配置，是因为那一档依赖一个手编的二进制（打了本地补丁的 llama.cpp 的产物，TODO.md T3）：
-        路径填对了但没编译，用户切过去只会拿到一句看不出来根的"ComfyUI 报错"。
+        探的是 socket 而不是文件：服务化之后"就绪"是"服务在不在"，不是"二进制文件在不在"。
+        探不到就让设置页把第 3 档按住、并说清去装服务（server.py 里那句），
+        而不是让用户切过去才拿到一句看不出来根的"ComfyUI 报错"。
 
-        **异机时（llama_remote）不查文件**：二进制在 ComfyUI 那台，应用查的是自己的文件系统、查不到。
-        这时信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台跑，`run_gate` 会报"取数程序不在：…"
-        （那句是人话，不是"ComfyUI 报错"）。
+        **异机时（llama_remote）不探**：服务在 ComfyUI 那台，应用连的是自己的机器、连不到。
+        这时信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台报"取数服务不在：…，先看 systemctl status llama-gate"。
         """
-        if not (self.llama_repo_root and self.llama_work_dir):
-            return False
         if self.llama_remote:
             return True
-        return os.path.isfile(os.path.join(self.llama_repo_root, "tools", "llama_gate", "bin", "dump_hidden"))
+        import socket
+
+        sock = self.llama_gate_sock or "/run/llama-gate/gate.sock"
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(0.5)
+        try:
+            conn.connect(sock)
+            return True
+        except OSError:
+            return False
+        finally:
+            conn.close()
 
 
 class SettingsError(Exception):
@@ -111,7 +121,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     )
     # 第 3 档那两条路径不写就用本 repo 自己（`tools/llama_gate` 与 `data/llama-gate` 本来就在那儿）：
     # 默认值只写在 dataclass 一处，免得 .env 缺键时两处说法不一致
-    for field, key in (("llama_repo_root", "TRYON_LLAMA_REPO_ROOT"), ("llama_work_dir", "TRYON_LLAMA_WORK_DIR")):
+    for field, key in (("llama_repo_root", "TRYON_LLAMA_REPO_ROOT"),
+                       ("llama_work_dir", "TRYON_LLAMA_WORK_DIR"),
+                       ("llama_gate_sock", "TRYON_LLAMA_GATE_SOCK")):
         if values.get(key):
             base = replace(base, **{field: values[key]})
     # ComfyUI 在远端时应用查不到二进制（在那一台），llama_ready 改成信配置

@@ -127,7 +127,7 @@ def create_app(
                 "comfy_url": prefs.comfy_url,
                 "default_comfy_url": DEFAULT_COMFY_URL,
                 "valid_sources": list(VALID_SOURCES),
-                # 第 3 档不是"用户想不想"的问题，是"这台机上有没有那个手编的取数程序"的问题，
+                # 第 3 档不是"用户想不想"的问题，是"这台机上取数服务在不在"的问题，
                 # 所以由服务端报状态、页面据此按住那一档（见 static/settings.js）
                 "llama_ready": settings.llama_ready,
                 "size": prefs.size,
@@ -146,9 +146,9 @@ def create_app(
         if source == LLAMA_SOURCE and not settings.llama_ready:
             return _fail(
                 "settings",
-                f"这台机上没有 llama.cpp 那一档：要 {settings.llama_repo_root}/tools/llama_gate/bin/dump_hidden "
-                "（用打了本地补丁的 llama.cpp 编译，命令写在那个 .cpp 文件头部）。编译出来再切，"
-                "或者先留在本机 ComfyUI 这一档。",
+                "这台机上取数服务（llama-gate）不在。装法：tools/llama_gate/llama-gate.service 拷到 "
+                "/etc/systemd/system/、llama-gate.env 拷到 /etc/llama-gate.env，然后 "
+                "`sudo systemctl enable --now llama-gate`。起起来再切，或者先留在本机 ComfyUI 这一档。",
                 400,
             )
         if not _is_http_url(comfy_url):
@@ -176,8 +176,7 @@ def create_app(
         problems = list(result.problems)
         if prefs.source == LLAMA_SOURCE and not settings.llama_ready:
             problems.append(
-                f"这台机上没有取数程序：{settings.llama_repo_root}/tools/llama_gate/bin/dump_hidden 不在，"
-                "第 3 档跑不了（编译命令在 dump_hidden.cpp 头部）"
+                "取数服务（llama-gate）不在：先看 systemctl status llama-gate。第 3 档跑不了。"
             )
         return jsonify({"ok": result.ok and not problems, "problems": problems})
 

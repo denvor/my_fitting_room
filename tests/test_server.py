@@ -1,4 +1,6 @@
+import contextlib
 import json
+import socket
 import threading
 from io import BytesIO
 from pathlib import Path
@@ -62,22 +64,33 @@ def fields(person=PERSON, garment=GARMENT, garment2=None, mode=None):
 
 
 COMFY_URL = "http://127.0.0.1:8188"
-GATE_REL = Path("tools") / "llama_gate" / "bin" / "dump_hidden"   # 第 3 档的"装好了"就看这个在不在
 
 
-def llama_settings(root, *, built: bool, remote: bool = False) -> Settings:
-    """把第 3 档的两条部署路径指到 tmp：不让测试结果跟着开发者自己编没编二进制变。
+def llama_settings(root, *, sock: str = "", remote: bool = False) -> Settings:
+    """把第 3 档的两条部署路径指到 tmp：不让测试结果跟着开发者自己装没装服务变。
 
-    remote=True 表示"ComfyUI 在远端"——二进制在那一台，应用查的是自己的文件系统，查不到。
+    `sock` 是取数服务的 socket 路径（空 = 用默认的 /run/llama-gate/gate.sock）。
+    remote=True 表示"ComfyUI 在远端"——服务在那一台，应用连的是自己的机器，连不到。
     """
     from dataclasses import replace
 
-    if built:
-        (root / GATE_REL).parent.mkdir(parents=True, exist_ok=True)
-        (root / GATE_REL).write_bytes(b"\x7fELF")
     return replace(Settings(endpoint="https://example.test/generation", api_key="k", model="m"),
                    llama_repo_root=str(root), llama_work_dir=str(root / "gate-work"),
-                   llama_remote=remote)
+                   llama_gate_sock=sock, llama_remote=remote)
+
+
+@contextlib.contextmanager
+def gate_socket(root):
+    """起一个真的 Unix socket 当"服务在"——llama_ready 探测的就是"能不能连上"，不是文件在不在。"""
+    path = Path(root) / "gate.sock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    srv = socket.socket(socket.AF_UNIX)
+    srv.bind(str(path))
+    srv.listen(1)
+    try:
+        yield str(path)
+    finally:
+        srv.close()
 
 
 def ok_comfy_generation(comfy_url, person, refs, prompt, timeout=300, size="1k", **_ignored) -> Generation:
@@ -528,38 +541,46 @@ def test_unexpected_local_error_does_not_claim_credit_loss(make):
 
 
 def test_settings_endpoint_returns_defaults(make, tmp_path):
-    client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, built=False))
+    client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, sock="/nonexistent/gate.sock"))
     body = client.get("/api/settings").get_json()
 
     assert body["ok"] is True and body["source"] == "comfyui"
     assert body["comfy_url"] == body["default_comfy_url"] == "http://127.0.0.1:8188"
     assert body["valid_sources"] == ["api", "comfyui", "comfyui_llama"]
-    assert body["llama_ready"] is False  # 这台没编取数程序：第 3 档的状态由服务端报，不让页面猜
+    assert body["llama_ready"] is False  # 取数服务不在：第 3 档的状态由服务端报，不让页面猜
 
 
-def test_第三档在编好取数程序的机器上可选可存(make, tmp_path):
-    client, _ = make(settings=llama_settings(tmp_path, built=True), saved_prefs=None)
-
-    body = client.get("/api/settings").get_json()
-    assert body["valid_sources"] == ["api", "comfyui", "comfyui_llama"] and body["llama_ready"] is True
-    r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
-    assert r.status_code == 200 and r.get_json()["source"] == "comfyui_llama"
+def test_服务在时llama_ready是True(make, tmp_path):
+    with gate_socket(tmp_path) as sock:
+        client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, sock=sock))
+        assert client.get("/api/settings").get_json()["llama_ready"] is True
 
 
-def test_没编取数程序时第三档要说清去编译而不是让人点了才炸(make, tmp_path):
-    """第 3 档依赖一个**手编**的二进制（补丁版 llama.cpp 的产物）。没编时把选项照放出来，
+def test_第三档在服务跑起来的机器上可选可存(make, tmp_path):
+    with gate_socket(tmp_path) as sock:
+        client, _ = make(settings=llama_settings(tmp_path, sock=sock), saved_prefs=None)
+
+        body = client.get("/api/settings").get_json()
+        assert body["valid_sources"] == ["api", "comfyui", "comfyui_llama"] and body["llama_ready"] is True
+        r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
+        assert r.status_code == 200 and r.get_json()["source"] == "comfyui_llama"
+
+
+def test_服务不在时第三档要说清去装服务而不是让人点了才炸(make, tmp_path):
+    """第 3 档依赖一个常驻服务（systemd 管）。没起时把选项照放出来，
     用户切过去只会拿到"ComfyUI 报错"那种看不出根因的话。"""
-    client, _ = make(settings=llama_settings(tmp_path, built=False), saved_prefs=None)
+    client, _ = make(settings=llama_settings(tmp_path, sock="/nonexistent/gate.sock"), saved_prefs=None)
 
     assert client.get("/api/settings").get_json()["llama_ready"] is False
     r = client.post("/api/settings", json={"source": "comfyui_llama", "comfy_url": COMFY_URL})
-    assert r.status_code == 400 and "编译" in r.get_json()["message"]
+    assert r.status_code == 400 and "systemctl" in r.get_json()["message"]
 
 
-def test_异机时第三档信配置不查本地文件(make, tmp_path):
-    """应用与 ComfyUI 异机时，二进制在 ComfyUI 那台，应用查的是自己的文件系统、查不到。
-    这时只能信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台报"取数程序不在"。"""
-    client, _ = make(saved_prefs=None, settings=llama_settings(tmp_path, built=False, remote=True))
+def test_异机时第三档信配置不连本地服务(make, tmp_path):
+    """应用与 ComfyUI 异机时，服务在 ComfyUI 那台，应用连的是自己的机器、连不到。
+    这时只能信配置让第 3 档可选；真缺的话由节点在 ComfyUI 那台报"取数服务不在"。"""
+    client, _ = make(saved_prefs=None,
+                      settings=llama_settings(tmp_path, sock="/nonexistent/gate.sock", remote=True))
 
     body = client.get("/api/settings").get_json()
     assert body["llama_ready"] is True
@@ -574,23 +595,25 @@ def test_第三档把编码节点与两个路径递下去(make, tmp_path):
         seen.update(kwargs, url=comfy_url)
         return ok_comfy_generation(comfy_url, person, refs, prompt, size=size)
 
-    s = llama_settings(tmp_path / "x", built=True)
-    client, root = make(comfy_fn=comfy_fn, settings=s, saved_prefs="comfyui_llama")
-    assert client.post("/api/tryon", data=fields()).status_code == 200
-    assert seen["encoder"] == "llama"
-    assert seen["llama_repo_root"] == s.llama_repo_root and seen["llama_work_dir"] == s.llama_work_dir
+    with gate_socket(tmp_path / "x") as sock:
+        s = llama_settings(tmp_path / "x", sock=sock)
+        client, root = make(comfy_fn=comfy_fn, settings=s, saved_prefs="comfyui_llama")
+        assert client.post("/api/tryon", data=fields()).status_code == 200
+        assert seen["encoder"] == "llama"
+        assert seen["llama_repo_root"] == s.llama_repo_root and seen["llama_work_dir"] == s.llama_work_dir
 
 
 def test_第三档也不查额度并且记在记录里(make, tmp_path):
     """第 3 档烧的是本机 GPU，跟第 2 档一样不花 credit：去查接口额度会多一次 CLI 调用，还会让人以为在花钱。"""
     quota_calls = Counter(fake_quota)
-    client, root = make(comfy_fn=ok_comfy_generation, quota_fn=quota_calls,
-                        settings=llama_settings(tmp_path, built=True), saved_prefs="comfyui_llama")
+    with gate_socket(tmp_path) as sock:
+        client, root = make(comfy_fn=ok_comfy_generation, quota_fn=quota_calls,
+                            settings=llama_settings(tmp_path, sock=sock), saved_prefs="comfyui_llama")
 
-    body = client.get("/api/quota").get_json()
-    assert body["source"] == "comfyui_llama" and body["quota"] is None and quota_calls.calls == 0
-    client.post("/api/tryon", data=fields())
-    assert client.get("/api/records").get_json()["records"][0]["meta"]["source"] == "comfyui_llama"
+        body = client.get("/api/quota").get_json()
+        assert body["source"] == "comfyui_llama" and body["quota"] is None and quota_calls.calls == 0
+        client.post("/api/tryon", data=fields())
+        assert client.get("/api/records").get_json()["records"][0]["meta"]["source"] == "comfyui_llama"
 
 
 def test_第三档在_comfyui_掉线时同样当众切回_api(tmp_path):
@@ -601,15 +624,16 @@ def test_第三档在_comfyui_掉线时同样当众切回_api(tmp_path):
     root = tmp_path / "records"
     prefs_file = root.parent / "settings.json"
     save_prefs(prefs_file, Prefs("comfyui_llama", COMFY_URL))
-    app = create_app(
-        llama_settings(tmp_path, built=True), generate_fn=ok_generation, root=root, quota_fn=fake_quota,
-        comfy_generate_fn=boom_comfy, comfy_check_fn=ok_check,
-        comfy_health_fn=lambda url: False, prefs_file=prefs_file,
-    )
-    app.testing = True
+    with gate_socket(tmp_path) as sock:
+        app = create_app(
+            llama_settings(tmp_path, sock=sock), generate_fn=ok_generation, root=root, quota_fn=fake_quota,
+            comfy_generate_fn=boom_comfy, comfy_check_fn=ok_check,
+            comfy_health_fn=lambda url: False, prefs_file=prefs_file,
+        )
+        app.testing = True
 
-    body = app.test_client().post("/api/comfy/fallback", json={}).get_json()
-    assert body["switched"] is True and body["source"] == "api"
+        body = app.test_client().post("/api/comfy/fallback", json={}).get_json()
+        assert body["switched"] is True and body["source"] == "api"
 
 
 def test_posted_source_takes_effect_without_restart(make):
