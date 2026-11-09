@@ -175,3 +175,31 @@ def test_二进制不在时报错要说清怎么编出来(monkeypatch):
     monkeypatch.setattr("subprocess.run", refuse)
     with pytest.raises(RuntimeError, match="编译"):
         run_gate(["a.png"], "文本", "/tmp/whatever")
+
+
+# --- 常驻服务的帧（Task 1）-------------------------------------------------
+
+from tools.llama_gate.protocol import decode_response, encode_request  # noqa: E402
+
+
+def test_请求帧的字段顺序与长度():
+    blob = encode_request([b"\x89PNG1", b"\x89PNG2"], "把衣服穿上")
+    assert blob[:4] == b"LGAT" and blob[4] == 1 and blob[5] == 0 and blob[6] == 2
+    assert int.from_bytes(blob[7:11], "little") == 5          # 图1 长度
+    assert blob[11:16] == b"\x89PNG1"
+    assert int.from_bytes(blob[16:20], "little") == 5         # 图2 长度
+    assert blob[20:25] == b"\x89PNG2"
+    assert blob[25:29] == len("把衣服穿上".encode()).to_bytes(4, "little")   # prompt 字节数
+    assert blob[29:] == "把衣服穿上".encode()
+
+
+def test_响应帧解出张量与槽位():
+    tensor = b"\x00" * (2 * 3 * 4)          # rows × n_embd × float32
+    blob = (b"LGAT" + bytes([0]) + (2).to_bytes(4, "little") + (3).to_bytes(4, "little")
+            + bytes([2]) + (8).to_bytes(4, "little") + (14).to_bytes(4, "little") + tensor)
+    assert decode_response(blob) == (0, 2, 3, [8, 14], tensor)
+
+
+def test_响应帧短了要报错():
+    with pytest.raises(ValueError):
+        decode_response(b"LGAT\x00\x01")
