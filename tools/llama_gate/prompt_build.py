@@ -5,7 +5,7 @@ ComfyUI 里的节点 `comfy_nodes/qwen21_precomp_cond.py`（生产用，在自�
 两边必须拼出同一串字节，否则 §19 那两个余弦数（0.98247 / 0.98080）就不是同一条序列。
 """
 
-MEDIA_MARKER = "<__media__>"   # mtmd_context_params.media_marker，与 dump_hidden.cpp 里设的那个一致
+MEDIA_MARKER = "<__media__>"   # mtmd_context_params.media_marker，与服务端 /etc/llama-gate.env 里设的那个一致
 
 
 def media_prompt(template: str, user_text: str, n_images: int) -> str:

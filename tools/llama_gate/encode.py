@@ -9,7 +9,8 @@
 
 用 ComfyUI 那套 venv 的 python 跑（项目 `.venv` 里没有 torch）：
     /home/denvor/work/ComfyUI/.venv/bin/python tools/llama_gate/encode.py --img a.png --img b.png \
-        --prompt "把衣服穿上" --out /tmp/cond.pt --work /tmp/gate
+        --prompt "把衣服穿上" --out /tmp/cond.pt
+（取数服务要先在跑：systemctl status llama-gate）
 """
 
 import argparse
@@ -43,12 +44,16 @@ def main() -> int:
         return 0
     from tools.llama_gate.protocol import FLAG_DEBUG
 
-    hidden, slots = run_gate(a.img, prompt, sock=a.sock, flags=FLAG_DEBUG if a.debug else 0)
+    hidden, slots, meta = run_gate(a.img, prompt, sock=a.sock, flags=FLAG_DEBUG if a.debug else 0)
     import torch
 
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"hidden": hidden, "image_slots": slots,
-                "provenance": {"行算术": "tools/llama_gate/llama_gate.cpp"}}, a.out)
+    blob = {"hidden": hidden, "image_slots": slots,
+            "provenance": {"行算术": "tools/llama_gate/llama_gate.cpp"}}
+    if a.debug:
+        # meta.json 的原文：离线判读（§19/§23/§24 那套）要靠它重建切行坐标（chunks 的 ids）
+        blob["meta.json"] = meta
+    torch.save(blob, a.out)
     print(json.dumps({"out": a.out, "形状": list(hidden.shape), "image_slots": slots}, ensure_ascii=False))
     return 0
 

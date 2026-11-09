@@ -38,21 +38,21 @@ function setState(text, kind) {
   chip.className = `tb-state${kind && kind !== "saved" ? ` ${kind}` : ""}`;
 }
 
-// 第 3 档依赖一个手编的取数二进制（补丁版 llama.cpp 的产物）。这台没编时把它按住并把话说清：
+// 第 3 档依赖一个常驻的取数服务（systemd 管）。这台没起时把它按住并把话说清：
 // 让人点得到一个"ComfyUI 报错"而不知道根因在自己机器上，比少一个选项糟得多。
 // 已经存着第 3 档的人不按住（他得能看见自己现在选的是哪条，哪怕正跑不动）。
 function markLlama(ready, chosen) {
   const input = document.querySelector('input[name="source"][value="comfyui_llama"]');
   if (!input) return;
   const sub = input.parentElement.querySelector(".sub");
-  const base = "不花额度 · 实测 480p 12 秒、720p 25 秒、1K 64 秒 · 出的不是同一张图：同构图的另一个细节版本";
+  const base = "不花额度 · 实测 480p 12 秒、720p 19 秒、1K 64 秒 · 出的不是同一张图：同构图的另一个细节版本";
   if (ready) {
     input.disabled = false;
     if (sub) sub.textContent = base;
     return;
   }
   input.disabled = !chosen; // 存着它的时候不许按住，否则这一档根本改不回来
-  if (sub) sub.textContent = `${base} · 这台机上还没有取数程序 dump_hidden（编译命令在 dump_hidden.cpp 头部）`;
+  if (sub) sub.textContent = `${base} · 这台机上取数服务（llama-gate）没起，先看 systemctl status llama-gate`;
 }
 
 function renderNow() {

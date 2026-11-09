@@ -295,6 +295,8 @@ int main() {
         std::vector<bool> chunk_is_text;
         std::string meta = "{\"n_embd\":" + std::to_string(n_embd) + ",\"chunks\":[";
         llama_pos n_past = 0;
+        bool eval_failed = false;
+        std::string eval_err;
         const size_t n_chunks = mtmd_input_chunks_size(chunks);
         for (size_t i = 0; i < n_chunks; ++i) {
             const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks, i);
@@ -306,15 +308,29 @@ int main() {
             } else {
                 n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
             }
+            // n_batch 守卫：embeddings 缓冲只有 n_batch 行，chunk 超过它会被拆成多次 decode，
+            // 只留最后一次的内容（越界读，而且**静默出错**）。换模型时这个值最容易被忘掉。
+            if (n_tokens > static_cast<size_t>(n_batch)) {
+                eval_failed = true;
+                eval_err = "第 " + std::to_string(i) + " 段有 " + std::to_string(n_tokens) +
+                           " 个 token，超过 LLAMA_GATE_N_BATCH=" + std::to_string(n_batch) +
+                           "（embeddings 缓冲只留最后一次 decode 的内容，会静默出错）";
+                break;
+            }
             llama_pos new_past = n_past;
             const int32_t r = mtmd_helper_eval_chunk_single(
                 mctx, ctx, chunk, n_past, 0, n_batch, false, &new_past);
             if (r) {
-                std::fprintf(stderr, "chunk %zu 解算失败 rc=%d\n", i, r);
+                eval_failed = true;
+                eval_err = "第 " + std::to_string(i) + " 段解算失败（rc=" + std::to_string(r) + "）";
                 break;
             }
             const float * pre = llama_get_embeddings_layer_inp(ctx, static_cast<uint32_t>(n_layer));
-            if (!pre) { std::fprintf(stderr, "拿不到 pre 向量 —— 补丁没生效？\n"); break; }
+            if (!pre) {
+                eval_failed = true;
+                eval_err = "拿不到 pre 向量 —— 补丁没生效或 layer_inp 没请求";
+                break;
+            }
             for (size_t t = 0; t < n_tokens; ++t) {
                 for (int32_t e = 0; e < n_embd; ++e) pre_all.push_back(pre[t * n_embd + e]);
             }
@@ -342,6 +358,14 @@ int main() {
             n_past = new_past;
         }
         llama_free(ctx);
+        // eval 中途失败要**报错**，不能把已算出的前几段当成完整序列回出去（那是静默画错）
+        if (eval_failed) {
+            write_error(fd, eval_err);
+            mtmd_input_chunks_free(chunks);
+            for (auto & w : wraps) if (w.bitmap) mtmd_bitmap_free(w.bitmap);
+            ::close(fd);
+            continue;
+        }
         const size_t total_rows = pre_all.size() / static_cast<size_t>(n_embd);
         meta += "],\"total_rows\":" + std::to_string(total_rows) +
                 ",\"补丁取的层\":" + std::to_string(n_layer) + "}";

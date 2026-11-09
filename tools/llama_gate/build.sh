@@ -72,7 +72,7 @@ fi
 if [ "$NEED_LIB" = 1 ]; then
     if [ "$SKIP_LIB" = 1 ]; then
         echo "库要重编（$LIB 不在或比源码旧），但给了 --skip-lib。" >&2
-        echo "dump_hidden 会链到旧库/链不上 —— 去掉这个参数，或先自己编库。" >&2
+        echo "llama-gate 会链到旧库/链不上 —— 去掉这个参数，或先自己编库。" >&2
         exit 1
     fi
     if [ ! -f build.sh ]; then

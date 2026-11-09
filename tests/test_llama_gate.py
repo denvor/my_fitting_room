@@ -9,7 +9,7 @@
 import pytest
 
 from tools.llama_gate.encode import media_prompt
-from tools.llama_gate.gate_client import gate_layout, resolve_gate_bin, run_gate
+from tools.llama_gate.gate_client import gate_layout, run_gate
 from tools.llama_gate.keep_rows import kept_row_index
 
 IM_START = 151644

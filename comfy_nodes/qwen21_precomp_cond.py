@@ -73,7 +73,8 @@ def _cond_via_llama(images_vl, prompt, repo_root, work_dir):
         p = os.path.join(work_dir, f"img{i + 1}.png")
         Image.fromarray(arr, "RGB").save(p)
         paths.append(p)
-    return run_gate(paths, media_prompt(T2I_TEMPLATE, prompt, len(paths)))
+    hidden, slots, _meta = run_gate(paths, media_prompt(T2I_TEMPLATE, prompt, len(paths)))
+    return hidden, slots
 
 
 class TextEncodeQwenImage21Precomputed(io.ComfyNode):

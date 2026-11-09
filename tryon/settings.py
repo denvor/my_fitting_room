@@ -24,13 +24,13 @@ class Settings:
     cookie_secure: bool = False
     size: str = DEFAULT_SIZE
     # 第 3 档（llama.cpp 出编码）的两条部署路径。默认就指着**本 repo**：tools/llama_gate 在这儿，
-    # 取数二进制也编在这儿。
+    # 取数服务的客户端（gate_client）也在这儿。
     #
     # **这两条是 ComfyUI 那台机器上的路径，不是应用这台的。** 节点跑在 ComfyUI 进程里，它 import
-    # gate_client、调 bin/dump_hidden、往 work_dir 落中转产物，用的都是 ComfyUI 所在机器的文件。
+    # gate_client、往 work_dir 落中转图、连那台的取数服务，用的都是 ComfyUI 所在机器的文件。
     # 应用与 ComfyUI 同机时默认值就对；异机时要用 .env 覆盖成 ComfyUI 那台的路径
     # （TRYON_LLAMA_REPO_ROOT / TRYON_LLAMA_WORK_DIR），否则节点会去应用自己机器上找。
-    # 二进制不能跨机器搬：RUNPATH 指向那台的 llama.cpp 构建，换机器要在那台重跑 tools/llama_gate/build.sh。
+    # 服务不能跨机器搬：RUNPATH 指向那台的 llama.cpp 构建，换机器要在那台重跑 tools/llama_gate/build.sh。
     llama_repo_root: str = str(PROJECT_ROOT)
     llama_work_dir: str = str(PROJECT_ROOT / "data" / "llama-gate")
     # 取数服务的 socket（.env 的 TRYON_LLAMA_GATE_SOCK）
@@ -126,7 +126,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
                        ("llama_gate_sock", "TRYON_LLAMA_GATE_SOCK")):
         if values.get(key):
             base = replace(base, **{field: values[key]})
-    # ComfyUI 在远端时应用查不到二进制（在那一台），llama_ready 改成信配置
+    # ComfyUI 在远端时应用连不到服务（在那一台），llama_ready 改成信配置
     if values.get("TRYON_LLAMA_REMOTE", "").lower() in ("1", "true", "yes"):
         base = replace(base, llama_remote=True)
     return base

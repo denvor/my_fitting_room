@@ -15,27 +15,8 @@ from pathlib import Path
 
 from tools.llama_gate.keep_rows import kept_row_index
 
-# 本机的权重（换机器改这儿，或用命令行/节点输入覆盖）
-GGUF = "/home/denvor/work/models/unsloth/Qwen3-VL-8B-Instruct-1M-UD-Q8_K_XL.gguf"
-MMPROJ = "/home/denvor/work/models/unsloth/mmproj-Qwen3-VL-8B-BF16.gguf"
-LLAMA_ROOT = "/home/denvor/work/llama/llama.cpp"   # 动态库在这，rpath 已编进二进制，这里只备查
+DEFAULT_SOCK = "/run/llama-gate/gate.sock"
 GATE_TIMEOUT = 600   # 一次取数 ≈ 7 秒（§25 分段账），留一百倍余量给冷盘与别的进程抢 GPU
-
-
-def repo_root() -> str:
-    return str(Path(__file__).resolve().parents[2])
-
-
-def resolve_gate_bin() -> str:
-    """取数程序在哪儿：环境变量 `LLAMA_GATE_BIN` 优先，否则 repo 里的 `tools/llama_gate/bin/`。
-
-    默认值**不能是 /tmp**：那个二进制是拿打了本地补丁的 llama.cpp 编出来的（`qwen3vl.cpp` 里 +15 行，
-    见 TODO.md T3），编一次不容易，落在 /tmp 等于每次重启都要重编一遍，而节点报的错只会是"没有那个文件"。
-    """
-    env = os.environ.get("LLAMA_GATE_BIN")
-    if env:
-        return env
-    return os.path.join(repo_root(), "tools", "llama_gate", "bin", "dump_hidden")
 
 
 def gate_layout(meta: dict, byte_size: int) -> tuple[list[int], list[int]]:
@@ -60,13 +41,12 @@ def gate_layout(meta: dict, byte_size: int) -> tuple[list[int], list[int]]:
     return idx, slots
 
 
-DEFAULT_SOCK = "/run/llama-gate/gate.sock"
-
-
 def run_gate(images: list[str], prompt: str, sock: str | None = None,
-             flags: int = 0, timeout: int = GATE_TIMEOUT) -> tuple["object", list[int]]:
-    """连取数服务，发图 + 指令，拿回 (hidden [1,N,n_embd], image_slots)。
+             flags: int = 0, timeout: int = GATE_TIMEOUT) -> tuple["object", list[int], bytes]:
+    """连取数服务，发图 + 指令，拿回 (hidden [1,N,n_embd], image_slots, meta)。
 
+    `meta` 只在 `flags` 带 FLAG_DEBUG 时有内容（服务端回的 meta.json，离线判读要用它重建切行坐标）；
+    普通请求是空 bytes。
     服务不在时报一句人话（现场要的是"去看 systemctl status"，不是 ConnectionRefusedError）。
     切行在服务端做，客户端拿到的就是采样器真正吃的那 115 行。
     """
@@ -101,8 +81,7 @@ def run_gate(images: list[str], prompt: str, sock: str | None = None,
     import numpy as np
     import torch
 
-    status, rows, n_embd, slots, tensor, _ = decode_response(
-        b"".join(chunks), want_debug=bool(flags & 1)
-    )
+    want_debug = bool(flags & 1)
+    status, rows, n_embd, slots, tensor, meta = decode_response(b"".join(chunks), want_debug=want_debug)
     hidden = torch.from_numpy(np.frombuffer(tensor, dtype=np.float32).copy()).reshape(1, rows, n_embd)
-    return hidden, slots
+    return hidden, slots, (meta if want_debug else b"")
