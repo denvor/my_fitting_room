@@ -21,8 +21,10 @@ denvor 看过图判"可以接受"（2026-11-03）。现在它是三档来源里�
 前提同 fork 节点：**cfg 必须等于 1.0**（negative 直接复用 positive）。
 
 还不是产品件的地方（铺界面那一档时要知道的边界）：`repo_root` / `work_dir` 是明文写在图里的路径；
-取数程序（`tools/llama_gate/bin/dump_hidden`）得自己按补丁版 llama.cpp 编译，不在场时报的是那句话而不是自动重建；
-`cond_source` 那条路每发都要重跑一次 llama.cpp（没有跨请求缓存，第二发同 prompt 同图靠 ComfyUI 的节点缓存）。
+取数服务（`tools/llama_gate/bin/llama-gate`）得在跑（systemd，`systemctl status llama-gate`），
+不在场时节点报"取数服务不在"；
+`cond_source` 那条路每发都要让服务算一次（服务是常驻的，但请求本身没有跨请求缓存，
+第二发同 prompt 同图靠 ComfyUI 的节点缓存）。
 """
 
 import math
@@ -45,14 +47,14 @@ def _gate_modules(repo_root):
     """
     if repo_root not in sys.path:
         sys.path.append(repo_root)
-    from tools.llama_gate.gate_client import cond_from_meta, run_gate
+    from tools.llama_gate.gate_client import run_gate
     from tools.llama_gate.prompt_build import media_prompt
 
-    return media_prompt, run_gate, cond_from_meta
+    return media_prompt, run_gate
 
 
 def _cond_via_llama(images_vl, prompt, repo_root, work_dir):
-    """节点自己 resize 完的那几张 → llama.cpp 取 pre-norm 条件 → 本进程切行，拿回 (hidden, slots)。
+    """节点自己 resize 完的那几张 → 发给常驻的取数服务 → 拿回切好的 (hidden, slots)。
 
     像素必须由节点出、而且走 8 位 PNG 无损往返：§19 那两个余弦数（0.98247 / 0.98080）就是在这份字节上量的，
     换成原图、换成 jpg、或者 float 直传，比出来的图差就说不清是谁贡献的了。
@@ -60,8 +62,8 @@ def _cond_via_llama(images_vl, prompt, repo_root, work_dir):
     from PIL import Image
 
     if not repo_root or not work_dir:
-        raise RuntimeError("cond_source 填了但 repo_root / work_dir 是空的 —— 不知道去哪儿找取数脚本")
-    media_prompt, run_gate, cond_from_meta = _gate_modules(repo_root)
+        raise RuntimeError("cond_source 填了但 repo_root / work_dir 是空的 —— 不知道去哪儿落中转图")
+    media_prompt, run_gate = _gate_modules(repo_root)
     from comfy.text_encoders.qwen_image21 import T2I_TEMPLATE   # 本进程第一次拿它要 1.3 秒，之后白送
 
     os.makedirs(work_dir, exist_ok=True)
@@ -71,8 +73,7 @@ def _cond_via_llama(images_vl, prompt, repo_root, work_dir):
         p = os.path.join(work_dir, f"img{i + 1}.png")
         Image.fromarray(arr, "RGB").save(p)
         paths.append(p)
-    meta = run_gate(paths, media_prompt(T2I_TEMPLATE, prompt, len(paths)), os.path.join(work_dir, "gate"))
-    return cond_from_meta(meta)
+    return run_gate(paths, media_prompt(T2I_TEMPLATE, prompt, len(paths)))
 
 
 class TextEncodeQwenImage21Precomputed(io.ComfyNode):
@@ -87,11 +88,11 @@ class TextEncodeQwenImage21Precomputed(io.ComfyNode):
                 io.String.Input("cond_path", advanced=True, default="",
                                 tooltip="外部算好的 [1,115,4096] .pt（pre-norm）。填了就直接用它（§23 那条路）。"),
                 io.String.Input("cond_source", advanced=True, default="",
-                                tooltip="留空 = 只读 cond_path。填任意值 = 现场调 llama.cpp 算（本进程直调 tools/llama_gate/bin/dump_hidden）。"),
+                                tooltip="留空 = 只读 cond_path。填任意值 = 让取数服务现场算（连 /run/llama-gate/gate.sock）。"),
                 io.String.Input("repo_root", advanced=True, default="/home/denvor/work/qwen-image",
-                                tooltip="取数脚本与权重路径的出处，换机器改这一处。"),
+                                tooltip="取数服务客户端的出处，换机器改这一处。"),
                 io.String.Input("work_dir", advanced=True, default="/tmp/llama-cond",
-                                tooltip="中转的 PNG 与取数程序的 pre.bin / meta.json 落这儿（一次约 46 MB；post.bin 默认不写）。"),
+                                tooltip="中转的 PNG 落这儿（发给取数服务前先落成 8 位 PNG）。"),
                 io.String.Input("prompt", multiline=True, dynamic_prompts=True,
                                 tooltip="本节点不编码它，只让它进缓存键：换一句就得重跑，别拿命中当免单。"),
                 io.String.Input("negative_prompt", multiline=True, dynamic_prompts=True,
