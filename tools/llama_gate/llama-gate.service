@@ -1,0 +1,17 @@
+[Unit]
+Description=llama.cpp 取数服务（ComfyUI 第 3 档）
+After=network.target
+
+[Service]
+Type=simple
+User=denvor
+# 让 systemd 自己建 /run/llama-gate 并 chown 给 User，省掉手工 mkdir/chown
+RuntimeDirectory=llama-gate
+RuntimeDirectoryMode=0755
+EnvironmentFile=/etc/llama-gate.env
+ExecStart=/home/denvor/work/qwen-image/tools/llama_gate/bin/llama-gate
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
