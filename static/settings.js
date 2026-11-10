@@ -45,7 +45,7 @@ function markLlama(ready, chosen) {
   const input = document.querySelector('input[name="source"][value="comfyui_llama"]');
   if (!input) return;
   const sub = input.parentElement.querySelector(".sub");
-  const base = "不花额度 · 实测 480p 12 秒、720p 19 秒、1K 64 秒 · 出的不是同一张图：同构图的另一个细节版本";
+  const base = "不花额度 · 实测 480p 10 秒、720p 19~23 秒、1K 60 秒 · 出的不是同一张图：同构图的另一个细节版本";
   if (ready) {
     input.disabled = false;
     if (sub) sub.textContent = base;
